@@ -10,7 +10,8 @@ import { BashLogs } from './bash_logs';
 import { BashKill } from './bash_kill';
 import { TodoRead } from './todo_read';
 import { TodoWrite } from './todo_write';
-import { createTaskRunTool, AgentTemplate } from './task_run';
+import { createTaskRunTool } from './task_run';
+import type { AgentTemplate } from './task_run';
 
 export const builtin = {
   fs: (): ToolInstance[] => [FsRead, FsWrite, FsEdit, FsGlob, FsGrep, FsMultiEdit],
@@ -24,4 +25,4 @@ export const builtin = {
   },
 };
 
-export { AgentTemplate };
+export type { AgentTemplate };
