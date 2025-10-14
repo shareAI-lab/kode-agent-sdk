@@ -25,4 +25,4 @@ tests/integration/.store/
 tests/tmp/
 *.log
 *.txt
-.kode/
+.kode/tests/.tmp/
