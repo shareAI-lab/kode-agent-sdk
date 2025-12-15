@@ -211,7 +211,7 @@ export const patterns = {
    * JSON 对象
    */
   json: (description = 'JSON object') =>
-    z.record(z.any()).describe(description),
+    z.record(z.string(), z.any()).describe(description),
 };
 
 /**

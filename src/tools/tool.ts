@@ -68,7 +68,7 @@ export function tool<TArgs = any, TResult = any>(
 
   // 生成 JSON Schema
   const input_schema = def.parameters
-    ? zodToJsonSchema(def.parameters, { target: 'openApi3', $refStrategy: 'none' })
+    ? zodToJsonSchema(def.parameters as any, { target: 'openApi3', $refStrategy: 'none' })
     : { type: 'object', properties: {} };
 
   // 创建工具实例

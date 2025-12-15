@@ -47,8 +47,8 @@ async function main() {
   const pool = new AgentPool({ dependencies: deps, maxAgents: 10 });
   const room = new Room(pool);
 
-  const planner = await pool.create('agt:planner', configFor('planner'));
-  const dev = await pool.create('agt:dev', configFor('executor'));
+  const planner = await pool.create('agt-planner', configFor('planner'));
+  const dev = await pool.create('agt-dev', configFor('executor'));
 
   room.join('planner', planner.agentId);
   room.join('dev', dev.agentId);

@@ -32,7 +32,7 @@ function parseEnvFile(filePath: string): Record<string, string> {
 /**
  * 测试数据根目录
  */
-export const TEST_ROOT = path.join(__dirname, '../.tmp');
+export const TEST_ROOT = path.join(process.cwd(), 'tests', '.tmp');
 
 /**
  * 集成测试配置

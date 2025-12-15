@@ -79,7 +79,7 @@ function bindControlAndMonitor(agent: Agent) {
 // ---- API route ----------------------------------------------------------
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const agentId = (req.query.agentId as string) || 'agt:web-demo';
+  const agentId = (req.query.agentId as string) || 'agt-web-demo';
   const agent = await resumeOrCreate(agentId);
 
   bindControlAndMonitor(agent);

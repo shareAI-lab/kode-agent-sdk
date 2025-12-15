@@ -113,13 +113,13 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
     model: apiConfig.model,
   } as const;
 
-  const planner = await pool.create('agt:planner', {
+  const planner = await pool.create('agt-planner', {
     templateId: 'room-planner',
     modelConfig,
     sandbox: { kind: 'local', workDir: plannerWorkDir, enforceBoundary: true, watchFiles: true },
   });
 
-  const dev = await pool.create('agt:dev', {
+  const dev = await pool.create('agt-dev', {
     templateId: 'room-executor',
     modelConfig,
     sandbox: { kind: 'local', workDir: devWorkDir, enforceBoundary: true, watchFiles: true },
@@ -169,7 +169,7 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   const devTodosStage2 = dev.getTodos();
   expect.toBeTruthy(devTodosStage2.some((todo) => todo.status === 'in_progress' || todo.status === 'completed'));
 
-  const fork = await pool.fork('agt:planner');
+  const fork = await pool.fork('agt-planner');
   const forkStatus = await fork.status();
   expect.toBeGreaterThan(forkStatus.stepCount, 0);
 
@@ -181,8 +181,8 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   detachDevTool();
   detachReminders();
 
-  await pool.delete('agt:planner');
-  await pool.delete('agt:dev');
+  await pool.delete('agt-planner');
+  await pool.delete('agt-dev');
   fs.rmSync(storeDir, { recursive: true, force: true });
   fs.rmSync(baseWorkDir, { recursive: true, force: true });
 });

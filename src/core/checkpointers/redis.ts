@@ -123,7 +123,7 @@ export class RedisCheckpointer implements Checkpointer {
 
     const forked: Checkpoint = {
       ...original,
-      id: `${newAgentId}:${Date.now()}`,
+      id: `${newAgentId}-${Date.now()}`,
       agentId: newAgentId,
       timestamp: Date.now(),
       metadata: {

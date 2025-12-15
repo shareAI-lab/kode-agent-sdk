@@ -36,7 +36,7 @@ import { AgentTemplateRegistry, AgentTemplateDefinition, PermissionConfig, SubAg
 import { Store } from '../infra/store';
 import { Sandbox, SandboxKind } from '../infra/sandbox';
 import { SandboxFactory } from '../infra/sandbox-factory';
-import { ModelProvider, ModelConfig, AnthropicProvider } from '../infra/provider';
+import { ModelProvider, ModelConfig, AnthropicProvider, OpenRouterProvider } from '../infra/provider';
 import { ToolRegistry, ToolInstance, ToolDescriptor } from '../tools/registry';
 import { Configurable } from './config';
 import { ContextManagerOptions } from './context-manager';
@@ -323,10 +323,10 @@ export class Agent {
     const model = config.model
       ? config.model
       : config.modelConfig
-      ? ensureModelFactory(deps.modelFactory)(config.modelConfig)
-      : template.model
-      ? ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model })
-      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
+        ? ensureModelFactory(deps.modelFactory)(config.modelConfig)
+        : template.model
+          ? ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model })
+          : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
 
     const resolvedTools = resolveTools(config, template, deps.toolRegistry, deps.templateRegistry);
 
@@ -498,7 +498,7 @@ export class Agent {
   }
 
   async snapshot(label?: string): Promise<SnapshotId> {
-    const id = label || `sfp:${this.lastSfpIndex}`;
+    const id = label || `sfp-${this.lastSfpIndex}`;
     const snapshot: Snapshot = {
       id,
       messages: JSON.parse(JSON.stringify(this.messages)),
@@ -518,7 +518,7 @@ export class Agent {
     const snapshot = await this.persistentStore.loadSnapshot(this.agentId, snapshotId);
     if (!snapshot) throw new Error(`Snapshot not found: ${snapshotId}`);
 
-    const forkId = `${this.agentId}/fork:${Date.now()}`;
+    const forkId = `${this.agentId}/fork-${Date.now()}`;
     const forkConfig: AgentConfig = {
       ...this.config,
       agentId: forkId,
@@ -1203,7 +1203,7 @@ export class Agent {
         const errorContent = outcome.content as any;
         const errorMessage = errorContent?.error || 'Tool returned failure';
         const errorType = errorContent?._validationError ? 'validation' :
-                          errorContent?._thrownError ? 'runtime' : 'logical';
+          errorContent?._thrownError ? 'runtime' : 'logical';
         const isRetryable = errorType !== 'validation';
 
         this.updateToolRecord(
@@ -1827,7 +1827,7 @@ export class Agent {
     const now = Date.now();
     const timePart = encodeUlid(now, 10, chars);
     const random = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-    return `agt:${timePart}${random}`;
+    return `agt-${timePart}${random}`;
   }
 }
 
@@ -1839,6 +1839,14 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         throw new Error('Anthropic provider requires apiKey');
       }
       return new AnthropicProvider(config.apiKey, config.model, config.baseUrl);
+    }
+    if (config.provider === "openrouter") {
+      if (!config.apiKey) {
+        throw new Error('openrouter provider requires apiKey');
+      }
+
+      return new OpenRouterProvider(config.apiKey, config.model, config.baseUrl)
+
     }
     throw new Error(`Model factory not provided for provider: ${config.provider}`);
   };
