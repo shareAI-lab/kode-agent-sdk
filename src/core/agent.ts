@@ -36,7 +36,7 @@ import { AgentTemplateRegistry, AgentTemplateDefinition, PermissionConfig, SubAg
 import { Store } from '../infra/store';
 import { Sandbox, SandboxKind } from '../infra/sandbox';
 import { SandboxFactory } from '../infra/sandbox-factory';
-import { ModelProvider, ModelConfig, AnthropicProvider } from '../infra/provider';
+import { ModelProvider, ModelConfig, AnthropicProvider, OpenRouterProvider } from '../infra/provider';
 import { ToolRegistry, ToolInstance, ToolDescriptor } from '../tools/registry';
 import { Configurable } from './config';
 import { ContextManagerOptions } from './context-manager';
@@ -323,10 +323,10 @@ export class Agent {
     const model = config.model
       ? config.model
       : config.modelConfig
-      ? ensureModelFactory(deps.modelFactory)(config.modelConfig)
-      : template.model
-      ? ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model })
-      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
+        ? ensureModelFactory(deps.modelFactory)(config.modelConfig)
+        : template.model
+          ? ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model })
+          : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
 
     const resolvedTools = resolveTools(config, template, deps.toolRegistry, deps.templateRegistry);
 
@@ -1203,7 +1203,7 @@ export class Agent {
         const errorContent = outcome.content as any;
         const errorMessage = errorContent?.error || 'Tool returned failure';
         const errorType = errorContent?._validationError ? 'validation' :
-                          errorContent?._thrownError ? 'runtime' : 'logical';
+          errorContent?._thrownError ? 'runtime' : 'logical';
         const isRetryable = errorType !== 'validation';
 
         this.updateToolRecord(
@@ -1839,6 +1839,14 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         throw new Error('Anthropic provider requires apiKey');
       }
       return new AnthropicProvider(config.apiKey, config.model, config.baseUrl);
+    }
+    if (config.provider === "openrouter") {
+      if (!config.apiKey) {
+        throw new Error('openrouter provider requires apiKey');
+      }
+
+      return new OpenRouterProvider(config.apiKey, config.model, config.baseUrl)
+
     }
     throw new Error(`Model factory not provided for provider: ${config.provider}`);
   };
