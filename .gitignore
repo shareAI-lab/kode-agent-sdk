@@ -26,3 +26,4 @@ tests/tmp/
 *.log
 *.txt
 .kode/tests/.tmp/
+tests/.tmp/
