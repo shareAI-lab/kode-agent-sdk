@@ -89,9 +89,7 @@ class MCPClientManager {
         version: '2.0.0',
       },
       {
-        capabilities: {
-          tools: {},
-        },
+        capabilities: {},
       }
     );
 

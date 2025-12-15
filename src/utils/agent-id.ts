@@ -24,5 +24,5 @@ export function generateAgentId(): string {
   const time = Date.now();
   const timePart = encodeTime(time, 10);
   const randomPart = encodeRandom(16);
-  return `agt:${timePart}${randomPart}`;
+  return `agt-${timePart}${randomPart}`;
 }

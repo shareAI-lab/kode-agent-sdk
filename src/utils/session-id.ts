@@ -27,7 +27,7 @@ export class SessionId {
         components.agentTemplate = part.slice(6);
       } else if (part.startsWith('session:')) {
         components.rootId = part.slice(8);
-      } else if (part.startsWith('fork:')) {
+      } else if (part.startsWith('fork-')) {
         components.forkIds.push(part.slice(5));
       }
     }
@@ -53,8 +53,8 @@ export class SessionId {
     if (opts.parentSessionId) {
       const parent = SessionId.parse(opts.parentSessionId);
       parts.push(`session:${parent.rootId}`);
-      parts.push(...parent.forkIds.map((id) => `fork:${id}`));
-      parts.push(`fork:${this.randomId()}`);
+      parts.push(...parent.forkIds.map((id) => `fork-${id}`));
+      parts.push(`fork-${this.randomId()}`);
     } else {
       parts.push(`session:${this.randomId()}`);
     }
@@ -63,7 +63,7 @@ export class SessionId {
   }
 
   static snapshot(sessionId: string, sfpIndex: number): string {
-    return `${sessionId}@sfp:${sfpIndex}`;
+    return `${sessionId}@sfp-${sfpIndex}`;
   }
 
   static label(sessionId: string, label: string): string {
