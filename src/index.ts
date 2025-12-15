@@ -57,7 +57,7 @@ export { JSONStore } from './infra/store';
 export type { Store } from './infra/store';
 export { LocalSandbox } from './infra/sandbox';
 export type { Sandbox, SandboxKind } from './infra/sandbox';
-export { AnthropicProvider } from './infra/provider';
+export { AnthropicProvider, OpenRouterProvider, createModelProvider } from './infra/provider';
 export type {
   ModelProvider,
   ModelConfig,
