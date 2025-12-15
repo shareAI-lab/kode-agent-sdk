@@ -35,14 +35,15 @@ runner
       setTodos: async () => {},
     };
 
-    await expect.toThrow(async () => {
-      await TodoWrite.exec({
-        todos: [
-          { id: '1', title: 'A', status: 'in_progress' },
-          { id: '2', title: 'B', status: 'in_progress' },
-        ],
-      }, { agent } as any);
-    });
+    const result = await TodoWrite.exec({
+      todos: [
+        { id: '1', title: 'A', status: 'in_progress' },
+        { id: '2', title: 'B', status: 'in_progress' },
+      ],
+    }, { agent } as any);
+
+    expect.toEqual(result.ok, false);
+    expect.toContain(result.error, 'in_progress');
   });
 
 export async function run() {

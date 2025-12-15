@@ -498,7 +498,7 @@ export class Agent {
   }
 
   async snapshot(label?: string): Promise<SnapshotId> {
-    const id = label || `sfp:${this.lastSfpIndex}`;
+    const id = label || `sfp-${this.lastSfpIndex}`;
     const snapshot: Snapshot = {
       id,
       messages: JSON.parse(JSON.stringify(this.messages)),
@@ -518,7 +518,7 @@ export class Agent {
     const snapshot = await this.persistentStore.loadSnapshot(this.agentId, snapshotId);
     if (!snapshot) throw new Error(`Snapshot not found: ${snapshotId}`);
 
-    const forkId = `${this.agentId}/fork:${Date.now()}`;
+    const forkId = `${this.agentId}/fork-${Date.now()}`;
     const forkConfig: AgentConfig = {
       ...this.config,
       agentId: forkId,
@@ -1827,7 +1827,7 @@ export class Agent {
     const now = Date.now();
     const timePart = encodeUlid(now, 10, chars);
     const random = Array.from({ length: 16 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
-    return `agt:${timePart}${random}`;
+    return `agt-${timePart}${random}`;
   }
 }
 
