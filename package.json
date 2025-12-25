@@ -19,7 +19,10 @@
     "example:approval": "ts-node examples/02-approval-control.ts",
     "example:room": "ts-node examples/03-room-collab.ts",
     "example:scheduler": "ts-node examples/04-scheduler-watch.ts",
-    "example:nextjs": "ts-node examples/nextjs-api-route.ts"
+    "example:nextjs": "ts-node examples/nextjs-api-route.ts",
+    "example:openrouter": "ts-node examples/05-openrouter-complete.ts",
+    "example:openrouter-stream": "ts-node examples/06-openrouter-stream.ts",
+    "example:openrouter-agent": "ts-node examples/07-openrouter-agent.ts"
   },
   "keywords": [
     "agent",
