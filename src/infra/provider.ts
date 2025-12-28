@@ -310,18 +310,53 @@ export class OpenRouterProvider implements ModelProvider {
       body.tool_choice = 'auto';
     }
 
-    const response = await fetch(`${stripTrailingSlash(this.baseUrl)}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    // Retry logic for rate limiting (429) errors
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
+    let response: Response | null = null;
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenRouter API error: ${response.status} ${error}`);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        response = await fetch(`${stripTrailingSlash(this.baseUrl)}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (response.ok) {
+          break; // Success, exit retry loop
+        }
+
+        const errorText = await response.text();
+
+        // Only retry on 429 (rate limit) errors
+        if (response.status === 429 && attempt < MAX_RETRIES - 1) {
+          // Parse retry-after header or use exponential backoff
+          const retryAfter = response.headers.get('retry-after');
+          const waitTime = retryAfter
+            ? parseInt(retryAfter, 10) * 1000
+            : Math.min(1000 * Math.pow(2, attempt), 10000); // Exponential backoff, max 10s
+
+          console.warn(`[OpenRouter] Rate limited (429), retrying in ${waitTime}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+
+        // Non-retryable error or max retries reached
+        throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        if (attempt === MAX_RETRIES - 1) {
+          throw lastError;
+        }
+      }
+    }
+
+    if (!response || !response.ok) {
+      throw lastError || new Error('OpenRouter API request failed');
     }
 
     const reader = response.body?.getReader();

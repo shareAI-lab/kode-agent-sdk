@@ -777,6 +777,8 @@ export class Agent {
     return Agent.resume(agentId, { ...baseConfig, ...overrides }, deps, opts);
   }
 
+  private pendingContinue = false;
+
   private ensureProcessing() {
     // 检查是否超时
     if (this.processingPromise) {
@@ -795,14 +797,22 @@ export class Agent {
         });
         this.processingPromise = null; // 强制重启
       } else {
+        // Mark that we need to continue after current processing finishes
+        this.pendingContinue = true;
         return; // 正常执行中
       }
     }
 
     this.lastProcessingStart = Date.now();
+    this.pendingContinue = false;
     this.processingPromise = this.runStep()
       .finally(() => {
         this.processingPromise = null;
+        // Check if we need to continue processing
+        if (this.pendingContinue) {
+          this.pendingContinue = false;
+          this.ensureProcessing();
+        }
       })
       .catch((err) => {
         // 确保异常不会导致状态卡住
