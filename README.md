@@ -13,7 +13,7 @@
 ## 60 秒上手：跑通第一个“协作收件箱”
 
 ```bash
-npm install @kode/sdk
+npm install @shareai-lab/kode-sdk
 export ANTHROPIC_API_KEY=sk-...        # 或 ANTHROPIC_API_TOKEN
 export ANTHROPIC_BASE_URL=https://...   # 可选，默认为官方 API
 export ANTHROPIC_MODEL_ID=claude-sonnet-4.5-20250929  # 可选
