@@ -91,6 +91,7 @@ export interface AgentConfig {
   };
   context?: ContextManagerOptions;
   metadata?: Record<string, any>;
+  history?: Message[];
 }
 
 interface AgentMetadata {
@@ -286,6 +287,10 @@ export class Agent {
       persist: () => this.persistMessages(),
       ensureProcessing: () => this.ensureProcessing(),
     });
+
+    if (config.history) {
+      this.messages = [...config.history];
+    }
 
     this.todoManager = new TodoManager({
       service: this.todoService,
