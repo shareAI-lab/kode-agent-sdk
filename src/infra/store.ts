@@ -228,6 +228,43 @@ export class JSONStore implements Store {
     return path.join(this.baseDir, agentId, 'meta.json');
   }
 
+  private async writeFileSafe(filePath: string, data: string): Promise<void> {
+    const fsp = require('fs').promises;
+    const path = require('path');
+    try {
+      await fsp.writeFile(filePath, data, 'utf-8');
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.writeFile(filePath, data, 'utf-8');
+    }
+  }
+
+  private async appendFileSafe(filePath: string, data: string): Promise<void> {
+    const fsp = require('fs').promises;
+    const path = require('path');
+    try {
+      await fsp.appendFile(filePath, data, 'utf-8');
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
+      await fsp.mkdir(path.dirname(filePath), { recursive: true });
+      await fsp.appendFile(filePath, data, 'utf-8');
+    }
+  }
+
+  private async renameSafe(tmpPath: string, destPath: string): Promise<void> {
+    const fs = require('fs');
+    const fsp = fs.promises;
+    const path = require('path');
+    try {
+      await fsp.rename(tmpPath, destPath);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
+      await fsp.mkdir(path.dirname(destPath), { recursive: true });
+      await fsp.rename(tmpPath, destPath);
+    }
+  }
+
   // ========== 运行时状态管理（带 WAL） ==========
 
   async saveMessages(agentId: string, messages: Message[]): Promise<void> {
@@ -247,9 +284,8 @@ export class JSONStore implements Store {
   }
 
   async saveTodos(agentId: string, snapshot: TodoSnapshot): Promise<void> {
-    const fs = require('fs').promises;
     const path = this.getRuntimePath(agentId, 'todos.json');
-    await fs.writeFile(path, JSON.stringify(snapshot, null, 2), 'utf-8');
+    await this.writeFileSafe(path, JSON.stringify(snapshot, null, 2));
   }
 
   async loadTodos(agentId: string): Promise<TodoSnapshot | undefined> {
@@ -266,43 +302,51 @@ export class JSONStore implements Store {
 
   private async saveWithWal<T>(agentId: string, name: string, data: T): Promise<void> {
     const fs = require('fs');
-    const fsp = fs.promises;
     const path = this.getRuntimePath(agentId, `${name}.json`);
     const walPath = this.getRuntimePath(agentId, `${name}.wal`);
 
     // 1. Write to WAL first
     const walData = JSON.stringify({ data, timestamp: Date.now() });
     await this.queueWalWrite(agentId, name, async () => {
-      await fsp.writeFile(walPath, walData, 'utf-8');
+      await this.writeFileSafe(walPath, walData);
     });
 
     // 2. Write to main file (atomic: tmp + rename)
     const tmp = `${path}.tmp`;
-    await fsp.writeFile(tmp, JSON.stringify(data, null, 2), 'utf-8');
-    await fsp.rename(tmp, path);
+    const payload = JSON.stringify(data, null, 2);
+    await this.writeFileSafe(tmp, payload);
+    try {
+      await this.renameSafe(tmp, path);
+    } catch (err: any) {
+      if (err?.code === 'ENOENT' && !fs.existsSync(tmp)) {
+        await this.writeFileSafe(tmp, payload);
+        await this.renameSafe(tmp, path);
+      } else {
+        throw err;
+      }
+    }
 
     // 3. Remove WAL after successful write
     if (fs.existsSync(walPath)) {
-      await fsp.unlink(walPath).catch(() => undefined);
+      await fs.promises.unlink(walPath).catch(() => undefined);
     }
   }
 
   private async loadWithWal<T>(agentId: string, name: string): Promise<T | undefined> {
     const fs = require('fs');
-    const fsp = fs.promises;
     const path = this.getRuntimePath(agentId, `${name}.json`);
     const walPath = this.getRuntimePath(agentId, `${name}.wal`);
 
     // 1. Check and recover from WAL if exists
     if (fs.existsSync(walPath)) {
       try {
-        const walData = JSON.parse(await fsp.readFile(walPath, 'utf-8'));
+        const walData = JSON.parse(await fs.promises.readFile(walPath, 'utf-8'));
         if (walData.data !== undefined) {
           // Recover from WAL
           const tmp = `${path}.tmp`;
-          await fsp.writeFile(tmp, JSON.stringify(walData.data, null, 2), 'utf-8');
-          await fsp.rename(tmp, path);
-          await fsp.unlink(walPath).catch(() => undefined);
+          await this.writeFileSafe(tmp, JSON.stringify(walData.data, null, 2));
+          await this.renameSafe(tmp, path);
+          await fs.promises.unlink(walPath).catch(() => undefined);
         }
       } catch (err) {
         logger.error(`Failed to recover ${name} from WAL:`, err);
@@ -311,7 +355,7 @@ export class JSONStore implements Store {
 
     // 2. Load from main file
     try {
-      const data = await fsp.readFile(path, 'utf-8');
+      const data = await fs.promises.readFile(path, 'utf-8');
       return JSON.parse(data);
     } catch {
       return undefined;
@@ -520,9 +564,8 @@ export class JSONStore implements Store {
       return;
     }
 
-    const fsp = require('fs').promises;
     const payload = writer.flushing.join('\n') + '\n';
-    await fsp.appendFile(this.getEventsPath(agentId, `${channel}.log`), payload);
+    await this.appendFileSafe(this.getEventsPath(agentId, `${channel}.log`), payload);
     writer.flushing = [];
     await this.writeEventWal(agentId, channel, writer);
   }
@@ -556,14 +599,13 @@ export class JSONStore implements Store {
 
   private async writeEventWal(agentId: string, channel: AgentChannel, writer: BufferedWriter): Promise<void> {
     const fs = require('fs');
-    const fsp = fs.promises;
     const walPath = this.getEventsPath(agentId, `${channel}.wal`);
     const schedule = async () => {
       const entries = [...writer.flushing, ...writer.buffer];
       if (entries.length > 0) {
-        await fsp.writeFile(walPath, entries.join('\n') + '\n', 'utf-8');
+        await this.writeFileSafe(walPath, entries.join('\n') + '\n');
       } else if (fs.existsSync(walPath)) {
-        await fsp.unlink(walPath).catch(() => undefined);
+        await fs.promises.unlink(walPath).catch(() => undefined);
       }
     };
     writer.walWriting = (writer.walWriting || Promise.resolve()).then(schedule, schedule);
@@ -573,11 +615,10 @@ export class JSONStore implements Store {
   // ========== 历史与压缩管理 ==========
 
   async saveHistoryWindow(agentId: string, window: HistoryWindow): Promise<void> {
-    const fs = require('fs').promises;
     const path = require('path');
     const dir = this.getHistoryDir(agentId, 'windows');
     const filePath = path.join(dir, `${window.timestamp}.json`);
-    await fs.writeFile(filePath, JSON.stringify(window, null, 2), 'utf-8');
+    await this.writeFileSafe(filePath, JSON.stringify(window, null, 2));
   }
 
   async loadHistoryWindows(agentId: string): Promise<HistoryWindow[]> {
@@ -600,11 +641,10 @@ export class JSONStore implements Store {
   }
 
   async saveCompressionRecord(agentId: string, record: CompressionRecord): Promise<void> {
-    const fs = require('fs').promises;
     const path = require('path');
     const dir = this.getHistoryDir(agentId, 'compressions');
     const filePath = path.join(dir, `${record.timestamp}.json`);
-    await fs.writeFile(filePath, JSON.stringify(record, null, 2), 'utf-8');
+    await this.writeFileSafe(filePath, JSON.stringify(record, null, 2));
   }
 
   async loadCompressionRecords(agentId: string): Promise<CompressionRecord[]> {
@@ -627,13 +667,12 @@ export class JSONStore implements Store {
   }
 
   async saveRecoveredFile(agentId: string, file: RecoveredFile): Promise<void> {
-    const fs = require('fs').promises;
     const path = require('path');
     const dir = this.getHistoryDir(agentId, 'recovered');
     const safePath = file.path.replace(/[\/\\]/g, '_');
     const filePath = path.join(dir, `${safePath}_${file.timestamp}.txt`);
     const header = `# Recovered: ${file.path}\n# Timestamp: ${file.timestamp}\n# Mtime: ${file.mtime}\n\n`;
-    await fs.writeFile(filePath, header + file.content, 'utf-8');
+    await this.writeFileSafe(filePath, header + file.content);
   }
 
   async loadRecoveredFiles(agentId: string): Promise<RecoveredFile[]> {
@@ -667,11 +706,10 @@ export class JSONStore implements Store {
   // ========== 快照管理 ==========
 
   async saveSnapshot(agentId: string, snapshot: Snapshot): Promise<void> {
-    const fs = require('fs').promises;
     const path = require('path');
     const dir = this.getSnapshotsDir(agentId);
     const filePath = path.join(dir, `${snapshot.id}.json`);
-    await fs.writeFile(filePath, JSON.stringify(snapshot, null, 2), 'utf-8');
+    await this.writeFileSafe(filePath, JSON.stringify(snapshot, null, 2));
   }
 
   async loadSnapshot(agentId: string, snapshotId: string): Promise<Snapshot | undefined> {
@@ -708,8 +746,7 @@ export class JSONStore implements Store {
   // ========== 元数据管理 ==========
 
   async saveInfo(agentId: string, info: AgentInfo): Promise<void> {
-    const fs = require('fs').promises;
-    await fs.writeFile(this.getMetaPath(agentId), JSON.stringify(info, null, 2), 'utf-8');
+    await this.writeFileSafe(this.getMetaPath(agentId), JSON.stringify(info, null, 2));
   }
 
   async loadInfo(agentId: string): Promise<AgentInfo | undefined> {

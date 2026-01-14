@@ -83,10 +83,15 @@ class MCPClientManager {
     }
 
     // 创建客户端
-    const client = new Client({
-      name: 'kode-sdk',
-      version: '2.0.0',
-    });
+    const client = new Client(
+      {
+        name: 'kode-sdk',
+        version: '2.0.0',
+      },
+      {
+        capabilities: {},
+      }
+    );
 
     // 连接
     await client.connect(transport);
