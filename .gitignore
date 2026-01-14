@@ -23,6 +23,7 @@ test-cli.ts
 tests/integration/provider.config.json
 tests/integration/.store/
 tests/tmp/
+tests/.tmp/
 *.log
 *.txt
 .kode/
