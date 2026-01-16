@@ -216,6 +216,15 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
   });
   const workDir = harness.getWorkDir();
   expect.toBeTruthy(workDir);
+  const createdSandboxes = new Set<any>();
+  const deps = harness.getDependencies();
+  const originalSandboxCreate = deps.sandboxFactory.create.bind(deps.sandboxFactory);
+  deps.sandboxFactory.create = (config: any) => {
+    const sandbox = originalSandboxCreate(config);
+    createdSandboxes.add(sandbox);
+    return sandbox;
+  };
+  createdSandboxes.add((harness.getAgent() as any).sandbox);
 
   const firstPrompt = '阶段1: 请先调用 hook_probe 工具记录 "phase-1", 然后用一句话说明你准备如何协助测试。';
   const phase1 = await harness.chatStep({
@@ -245,7 +254,14 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
   currentStage = '阶段2-Resume';
 
   await harness.resume('阶段2');
-  const secondPrompt = '阶段2: 在继续对话前再次调用 hook_probe 记录 "phase-2", 并说明子代理刚刚给出的总结内容。';
+  const secondPrompt = [
+    '阶段2: 在继续对话前再次调用 hook_probe 记录 "phase-2"。',
+    '子代理刚刚给出的总结如下：',
+    '<<<',
+    subTaskResult1.text || '(空)',
+    '>>>',
+    '请直接复述上述总结内容，不要调用任何工具，也不要委派子代理。',
+  ].join('\n');
   const phase2 = await harness.chatStep({
     label: '阶段2',
     prompt: secondPrompt,
@@ -309,6 +325,9 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
     )
   );
 
+  for (const sandbox of createdSandboxes) {
+    await sandbox?.dispose?.();
+  }
   await harness.cleanup();
 });
 

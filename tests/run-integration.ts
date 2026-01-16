@@ -79,6 +79,7 @@ async function runAll() {
   } else {
     console.log('✓ 所有集成测试通过\n');
   }
+
 }
 
 runAll().catch(err => {

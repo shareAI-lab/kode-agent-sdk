@@ -57,23 +57,33 @@ runner.test('Manual resume preserves hooks, todos, custom tool and subagent stat
 
   const stage1 = await harness.chatStep({
     label: 'Resume阶段1',
-    prompt: '请调用 resume_probe 工具记录“阶段1”，并创建一个标题为 ResumeCase 的 todo。',
-    expectation: {
-      includes: ['ResumeCase', '阶段1'],
-    },
+    prompt:
+      '请调用 resume_probe 工具记录“阶段1”，并创建一个标题为 ResumeCase 的 todo。' +
+      '请在回复中明确包含“阶段1”和“ResumeCase”。',
   });
-  expect.toBeTruthy(stage1.reply.text?.includes('ResumeCase'));
+  const stage1CustomEvents = stage1.events.filter(
+    (evt) => evt.channel === 'monitor' && evt.event.type === 'tool_custom_event'
+  );
+  expect.toBeGreaterThanOrEqual(stage1CustomEvents.length, 1);
+  const stage1TodoEvents = stage1.events.filter(
+    (evt) => evt.channel === 'monitor' && evt.event.type === 'todo_changed'
+  );
+  expect.toBeGreaterThanOrEqual(stage1TodoEvents.length, 1);
 
   const todosBefore = agent.getTodos();
   expect.toEqual(todosBefore.length, 1);
 
   const statusBefore = await agent.status();
 
+  const agentBeforeResume = harness.getAgent() as any;
   await harness.resume('Resume阶段2');
+  await agentBeforeResume.sandbox?.dispose?.();
 
   const stage2 = await harness.chatStep({
     label: 'Resume阶段2',
-    prompt: '请再次调用 resume_probe 记录“阶段2”，并确认 todo 仍为 ResumeCase。',
+    prompt:
+      '请再次调用 resume_probe 记录“阶段2”，并确认 todo 仍为 ResumeCase。' +
+      '请在回复中明确包含“阶段2”和“ResumeCase”。',
     expectation: {
       includes: ['阶段2', 'ResumeCase'],
     },
@@ -98,6 +108,8 @@ runner.test('Manual resume preserves hooks, todos, custom tool and subagent stat
   expect.toBeGreaterThanOrEqual(hookFlags.post, 2);
   expect.toBeGreaterThanOrEqual(hookFlags.messagesChanged, 2);
 
+  const currentAgent = harness.getAgent() as any;
+  await currentAgent.sandbox?.dispose?.();
   await harness.cleanup();
 });
 
@@ -110,7 +122,9 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   const harness = await IntegrationHarness.create({
     customTemplate: {
       id: 'resume-crash',
-      systemPrompt: 'You must request approval before writing files and never bypass approvals.',
+      systemPrompt:
+        'When asked to write files, call fs_write directly to trigger system approval. ' +
+        'Do not ask for approval in natural language or wait for user confirmation.',
       tools: ['fs_write', 'fs_read'],
       permission: { mode: 'approval', requireApprovalTools: ['fs_write'] as const },
     },
@@ -122,14 +136,25 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   const targetFile = path.join(workDir!, 'resume-crash.txt');
   fs.writeFileSync(targetFile, '原始内容');
 
-  const { reply } = await harness.chatStep({
+  const crashStage1 = await harness.chatStep({
     label: 'Crash阶段1',
-    prompt: '请将 resume-crash.txt 覆盖为 “已修改”。等待批准后再继续。',
+    prompt: '请使用 fs_read 读取 resume-crash.txt。只调用 fs_read，不要写入。',
+  });
+
+  const crashStage2 = await harness.chatStep({
+    label: 'Crash阶段2',
+    prompt:
+      '请调用 fs_write 将 resume-crash.txt 覆盖为“已修改”。' +
+      '必须实际调用 fs_write 触发系统审批，不要只口头询问；审批由系统处理。',
     approval: { mode: 'manual' },
   });
 
+  const { reply } = crashStage2;
   expect.toEqual(reply.status, 'paused');
-  expect.toBeTruthy(reply.permissionIds && reply.permissionIds.length === 1);
+  const permissionEvents = crashStage2.events.filter(
+    (evt: any) => evt.channel === 'control' && evt.event.type === 'permission_required'
+  );
+  expect.toBeGreaterThanOrEqual(permissionEvents.length, 1);
 
   const config = harness.getConfig();
   const deps = harness.getDependencies();
@@ -148,8 +173,15 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   );
 
   const toolRecords = await deps.store.loadToolCallRecords(agentId);
-  expect.toBeTruthy(toolRecords.length >= 1);
-  expect.toBeTruthy(toolRecords.every((record) => record.state === 'SEALED'));
+  const readRecords = toolRecords.filter((record) => record.name === 'fs_read');
+  const writeRecords = toolRecords.filter((record) => record.name === 'fs_write');
+  expect.toBeGreaterThanOrEqual(readRecords.length, 1);
+  expect.toBeGreaterThanOrEqual(writeRecords.length, 1);
+  expect.toBeTruthy(readRecords.every((record) => record.state === 'COMPLETED'));
+  expect.toBeTruthy(writeRecords.every((record) => record.state === 'SEALED'));
+  const firstReadAt = Math.min(...readRecords.map((record) => record.createdAt));
+  const firstWriteAt = Math.min(...writeRecords.map((record) => record.createdAt));
+  expect.toBeTruthy(firstReadAt < firstWriteAt);
 
   const messages = await deps.store.loadMessages(agentId);
   const lastMessage = messages[messages.length - 1];
@@ -162,6 +194,8 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   const followUp = await resumed.chat('请确认上一次写入被封存，并说明文件仍是原始内容。');
   expect.toBeTruthy(followUp.text);
 
+  await (resumed as any).sandbox?.dispose?.();
+  await (agent as any).sandbox?.dispose?.();
   await harness.cleanup();
 });
 
