@@ -74,7 +74,7 @@ runner
     const globResult = await FsGlob.exec({ pattern: '*.ts' }, ctx);
     expect.toEqual(globResult.matches.length, 2);
 
-    const grepResult = await FsGrep.exec({ pattern: 'const', path: '.' }, ctx);
+    const grepResult = await FsGrep.exec({ pattern: 'const', path: '**/*' }, ctx);
     expect.toBeGreaterThan(grepResult.matches.length, 0);
   })
 

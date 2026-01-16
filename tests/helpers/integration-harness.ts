@@ -11,6 +11,11 @@ export interface ChatStepOptions {
   label: string;
   prompt: string;
   expectation?: ChatStepExpectation;
+  approval?: {
+    mode?: 'auto' | 'manual';
+    decision?: 'allow' | 'deny';
+    note?: string;
+  };
 }
 
 export interface DelegateTaskOptions {
@@ -53,59 +58,38 @@ export class IntegrationHarness {
 
   async chatStep(opts: ChatStepOptions) {
     const { label, prompt, expectation } = opts;
+    const approvalMode = opts.approval?.mode ?? 'auto';
+    const approvalDecision = opts.approval?.decision ?? 'allow';
+    const approvalNote = opts.approval?.note ?? `auto ${approvalDecision} by integration harness`;
     this.log(`\n[${label}] >>> 用户指令`);
     this.log(`[${label}] ${prompt}`);
 
     const iterator = this.agent.subscribe(['progress', 'monitor', 'control'])[Symbol.asyncIterator]();
     const events: SubscriptionEvent[] = [];
     const pendingReply = this.agent.chat(prompt);
-
-    const delay = (ms: number) =>
-      new Promise<{ kind: 'idle' }>((resolve) => setTimeout(() => resolve({ kind: 'idle' }), ms));
+    const handledApprovals = new Set<string>();
+    let streamedText = '';
+    let stoppedForApproval = false;
 
     let replyResolved = false;
     let replyResult: Awaited<ReturnType<Agent['chat']>> | undefined;
+    let replyError: unknown;
+
+    pendingReply
+      .then((reply) => {
+        replyResult = reply;
+        replyResolved = true;
+      })
+      .catch((error) => {
+        replyError = error;
+        replyResolved = true;
+      });
 
     while (true) {
-      const contenders: Array<Promise<any>> = [
-        iterator
-          .next()
-          .then((res) => ({ kind: 'event' as const, res }))
-          .catch((error) => ({ kind: 'error' as const, error })),
-      ];
-
-      if (!replyResolved) {
-        contenders.push(
-          pendingReply.then((reply) => ({ kind: 'reply' as const, reply }))
-        );
-      } else {
-        contenders.push(delay(750));
-      }
-
-      const outcome = await Promise.race(contenders);
-
-      if (outcome.kind === 'error') {
-        throw outcome.error;
-      }
-
-      if (outcome.kind === 'reply') {
-        replyResult = outcome.reply;
-        replyResolved = true;
-        continue;
-      }
-
-      if (outcome.kind === 'idle') {
-        // 已经获得模型回复，且事件流在空闲后无更多数据
-        break;
-      }
-
-      const { value, done } = outcome.res;
+      const { value, done } = await iterator.next();
       if (!value) {
-        if (done && replyResolved) {
-          break;
-        }
         if (done) {
-          continue;
+          break;
         }
         // 无事件但未标记完成，继续等待
         continue;
@@ -120,11 +104,39 @@ export class IntegrationHarness {
           (event.delta ? `, delta=${event.delta.slice?.(0, 120)}` : '')
       );
 
-      if (channel === 'progress' && event.type === 'done') {
-        if (!replyResolved) {
-          replyResult = await pendingReply;
-          replyResolved = true;
+      if (channel === 'progress' && event.type === 'text_chunk' && typeof event.delta === 'string') {
+        streamedText += event.delta;
+      }
+
+      if (channel === 'control' && event.type === 'permission_required') {
+        const callId = event.call?.id || event.callId || event.permissionId;
+        if (callId && !handledApprovals.has(callId)) {
+          handledApprovals.add(callId);
+          if (approvalMode === 'auto') {
+            if (typeof event.respond === 'function') {
+              await event.respond(approvalDecision, { note: approvalNote });
+            } else {
+              await this.agent.decide(callId, approvalDecision, approvalNote);
+            }
+          } else {
+            pendingReply.catch(() => undefined);
+            replyResult = {
+              status: 'paused',
+              text: streamedText || undefined,
+              last: undefined,
+              permissionIds: callId ? [callId] : [],
+            } as Awaited<ReturnType<Agent['chat']>>;
+            replyResolved = true;
+            stoppedForApproval = true;
+          }
         }
+      }
+
+      if (channel === 'progress' && event.type === 'done') {
+        break;
+      }
+
+      if (stoppedForApproval) {
         break;
       }
     }
@@ -133,9 +145,17 @@ export class IntegrationHarness {
       await iterator.return();
     }
 
-    if (!replyResolved) {
+    if (replyError) {
+      throw replyError;
+    }
+
+    if (!replyResolved && !stoppedForApproval) {
       replyResult = await pendingReply;
       replyResolved = true;
+    }
+
+    if (stoppedForApproval && !replyResolved) {
+      pendingReply.catch(() => undefined);
     }
 
     const reply = replyResult!;

@@ -35,21 +35,24 @@ runner.test('审批后工具继续执行', async () => {
 
   const controlEventsPromise = collectEvents(agent, ['control'], (event) => event.type === 'permission_decided');
 
-  const result = await agent.chat('请建立一个标题为「审批集成测试」的待办，并等待批准。');
-  expect.toEqual(result.status, 'paused');
-  expect.toBeTruthy(result.permissionIds && result.permissionIds.length > 0);
+  const { reply, events } = await harness.chatStep({
+    label: '权限阶段',
+    prompt: '请建立一个标题为「审批集成测试」的待办，并等待批准。',
+  });
+  expect.toEqual(reply.status, 'ok');
 
-  const permissionId = result.permissionIds![0];
-
-  const monitorStream = collectEvents(agent, ['monitor'], (event) => event.type === 'state_changed' && event.state === 'READY');
-
-  await agent.decide(permissionId, 'allow', '测试批准');
+  const controlEvents = (await controlEventsPromise) as any[];
+  expect.toBeGreaterThanOrEqual(controlEvents.length, 1);
+  expect.toBeGreaterThanOrEqual(
+    events.filter((evt) => evt.channel === 'control' && evt.event.type === 'permission_required').length,
+    1
+  );
+  expect.toBeGreaterThanOrEqual(
+    events.filter((evt) => evt.channel === 'control' && evt.event.type === 'permission_decided').length,
+    1
+  );
 
   await wait(1500);
-  await monitorStream;
-  const controlEvents = (await controlEventsPromise) as any[];
-  expect.toEqual(controlEvents.some((event) => event.type === 'permission_required'), true);
-  expect.toEqual(controlEvents.some((event) => event.type === 'permission_decided'), true);
 
   const todos = agent.getTodos();
   expect.toEqual(todos.length, 1);

@@ -1,6 +1,7 @@
 import { collectEvents } from '../../helpers/setup';
 import { TestRunner, expect } from '../../helpers/utils';
 import { tool, EnhancedToolContext } from '../../../src/tools/tool';
+import fs from 'fs';
 import { z } from 'zod';
 import { ModelResponse } from '../../../src/infra/provider';
 import { ContentBlock, ToolOutcome } from '../../../src/core/types';
@@ -213,6 +214,8 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
       });
     },
   });
+  const workDir = harness.getWorkDir();
+  expect.toBeTruthy(workDir);
 
   const firstPrompt = '阶段1: 请先调用 hook_probe 工具记录 "phase-1", 然后用一句话说明你准备如何协助测试。';
   const phase1 = await harness.chatStep({
@@ -227,10 +230,13 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
   console.log('\n[阶段1] progress 事件数量:', phase1.events.filter((e) => e.channel === 'progress').length);
   console.log('[阶段1] monitor 事件数量:', phase1.events.filter((e) => e.channel === 'monitor').length);
 
+  const phase1NotePath = `${workDir}/phase1-summary.txt`;
+  fs.writeFileSync(phase1NotePath, `阶段1对话摘要:\n${phase1.reply.text || ''}\n`);
+
   const subTaskResult1 = await harness.delegateTask({
     label: '阶段1-子代理',
     templateId: subAgentTemplate.id,
-    prompt: '请总结阶段1的交流内容，回答两句话。',
+    prompt: `请先使用 fs_read 读取 ${phase1NotePath}（不要读取目录），然后用两句话总结内容。`,
     tools: subAgentTemplate.tools,
   });
   console.log('[阶段1] 子代理任务结果:', subTaskResult1.text);
@@ -252,10 +258,13 @@ runner.test('Hook 与工具/Resume/子代理组合流程', async () => {
   console.log('\n[阶段2] progress 事件数量:', phase2.events.filter((e) => e.channel === 'progress').length);
   console.log('[阶段2] monitor 事件数量:', phase2.events.filter((e) => e.channel === 'monitor').length);
 
+  const phase2NotePath = `${workDir}/phase2-summary.txt`;
+  fs.writeFileSync(phase2NotePath, `阶段2对话摘要:\n${phase2.reply.text || ''}\n`);
+
   const subTaskResult2 = await harness.delegateTask({
     label: '阶段2-子代理',
     templateId: subAgentTemplate.id,
-    prompt: '请再次总结当前对话，确保提到阶段2的要求。',
+    prompt: `请先使用 fs_read 读取 ${phase2NotePath}（不要读取目录），然后用两句话总结内容并提到阶段2。`,
     tools: subAgentTemplate.tools,
   });
   console.log('[阶段2] 子代理任务结果:', subTaskResult2.text);

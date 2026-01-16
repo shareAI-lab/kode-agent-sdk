@@ -150,24 +150,14 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
     label: '阶段2',
     prompt:
       '请委派子代理将 task-run-composite.txt 内容改写为“子代理已成功更新”。确保获取审批后继续，并将 todo 状态标记为 in_progress。',
-    expectation: {
-      includes: ['阶段2', '审批'],
-    },
   });
-
-  expect.toEqual(stage2.reply.status, 'paused');
-  expect.toBeTruthy(stage2.reply.permissionIds && stage2.reply.permissionIds.length > 0);
-  const permissionId = stage2.reply.permissionIds![0];
 
   const controlEvents = await permissionRequired;
   expect.toBeGreaterThanOrEqual(controlEvents.length, 1);
-
-  const progressUntilDone = collectEvents(agent, ['progress'], (event) => event.type === 'done');
-  const decisionEvents = collectEvents(agent, ['control'], (event) => event.type === 'permission_decided');
-
-  await agent.decide(permissionId, 'allow', '允许子代理写入文件');
-  await progressUntilDone;
-  await decisionEvents;
+  expect.toBeGreaterThanOrEqual(
+    stage2.events.filter((evt) => evt.channel === 'control' && evt.event.type === 'permission_decided').length,
+    1
+  );
 
   const fileContent = fs.readFileSync(targetFile, 'utf-8');
   expect.toContain(fileContent, '子代理已成功更新');

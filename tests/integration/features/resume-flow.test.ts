@@ -125,6 +125,7 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   const { reply } = await harness.chatStep({
     label: 'Crash阶段1',
     prompt: '请将 resume-crash.txt 覆盖为 “已修改”。等待批准后再继续。',
+    approval: { mode: 'manual' },
   });
 
   expect.toEqual(reply.status, 'paused');
@@ -136,7 +137,10 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
 
   const resumed = await Agent.resume(agentId, config, deps, { strategy: 'crash' });
 
-  const timeline = resumed.events.getTimeline();
+  const timeline: any[] = [];
+  for await (const entry of deps.store.readEvents(agentId, { channel: 'monitor' })) {
+    timeline.push(entry);
+  }
   expect.toBeTruthy(
     timeline.some(
       (entry) => entry.event.type === 'agent_resumed' && (entry.event as any).strategy === 'crash' && (entry.event as any).sealed?.length >= 1

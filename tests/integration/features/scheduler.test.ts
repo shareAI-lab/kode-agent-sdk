@@ -9,8 +9,7 @@ import { wait, collectEvents } from '../../helpers/setup';
 const runner = new TestRunner('集成测试 - Scheduler 与监控');
 
 runner.test('Scheduler 触发提醒并捕获文件监控事件', async () => {
-  console.log('
-[Scheduler测试] 场景目标:');
+  console.log('\n[Scheduler测试] 场景目标:');
   console.log('  1) 调度器按步数发送提醒并驱动 reminder 消息');
   console.log('  2) 监听 file_changed 与 todo_reminder 事件');
   console.log('  3) 验证 fs_* 工具写入后事件流一致');
@@ -21,8 +20,7 @@ runner.test('Scheduler 触发提醒并捕获文件监控事件', async () => {
       systemPrompt: [
         'You are an operations assistant monitoring repository changes.',
         'Keep todos synchronised with reminders and describe file updates准确.',
-      ].join('
-'),
+      ].join('\n'),
       tools: ['fs_read', 'fs_write', 'fs_edit', 'todo_write', 'todo_read'],
       runtime: {
         todo: { enabled: true, reminderOnStart: true, remindIntervalSteps: 2 },
@@ -34,8 +32,7 @@ runner.test('Scheduler 触发提醒并捕获文件监控事件', async () => {
   const workDir = harness.getWorkDir();
   expect.toBeTruthy(workDir);
   const targetFile = path.join(workDir!, 'scheduler-demo.txt');
-  fs.writeFileSync(targetFile, '初始内容
-');
+  fs.writeFileSync(targetFile, '初始内容\n');
 
   const scheduler = agent.schedule();
   const reminders: string[] = [];
@@ -65,8 +62,7 @@ runner.test('Scheduler 触发提醒并捕获文件监控事件', async () => {
   const todosAfterStage1 = agent.getTodos();
   expect.toBeTruthy(todosAfterStage1.some((todo) => todo.title.includes('监控演示')));
 
-  fs.writeFileSync(targetFile, '已修改的内容
-');
+  fs.writeFileSync(targetFile, '已修改的内容\n');
   await wait(2000);
 
   const stage2 = await harness.chatStep({
@@ -81,12 +77,15 @@ runner.test('Scheduler 触发提醒并捕获文件监控事件', async () => {
   const todosAfterStage2 = agent.getTodos();
   expect.toBeTruthy(todosAfterStage2.some((todo) => todo.status === 'in_progress'));
 
-  fs.appendFileSync(targetFile, '追加一行
-');
+  fs.appendFileSync(targetFile, '追加一行\n');
   await wait(2000);
 
-  const progressEvents = await collectEvents(agent, ['progress'], (event) => event.type === 'done');
-  expect.toBeGreaterThanOrEqual(progressEvents.length, 1);
+  const progressEvents = collectEvents(agent, ['progress'], (event) => event.type === 'done');
+  await harness.chatStep({
+    label: 'Scheduler阶段3',
+    prompt: '请确认你仍在监控并输出一句简短确认。',
+  });
+  expect.toBeGreaterThanOrEqual((await progressEvents).length, 1);
 
   scheduler.clear();
   unsubscribeTodo();

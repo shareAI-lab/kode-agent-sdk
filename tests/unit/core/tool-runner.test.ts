@@ -50,7 +50,11 @@ runner
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect.toEqual(executed, false);
     expect.toHaveLength(results, 0);
-    await second; // ensure no unhandled rejection
+    const outcome = await Promise.race([
+      second.then(() => 'resolved'),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 20)),
+    ]);
+    expect.toEqual(outcome, 'timeout');
   })
 
   .test('任务失败不会阻塞队列并保持后续执行', async () => {
@@ -69,10 +73,10 @@ runner
       });
 
     const tasks = [
-      makeTask('A', 10),
-      makeTask('B', 20, true),
+      makeTask('A', 50),
+      makeTask('B', 5, true),
       makeTask('C', 5),
-      makeTask('D', 15),
+      makeTask('D', 5),
     ];
 
     const settled = await Promise.all(
@@ -95,7 +99,10 @@ runner
     const endMarkers = timeline.filter((entry) => entry.endsWith('end'));
     expect.toBeGreaterThanOrEqual(endMarkers.length, 3);
     expect.toEqual(timeline.includes('B:error'), true);
-    expect.toEqual(timeline.indexOf('C:end') > timeline.indexOf('B:error'), true);
+    expect.toEqual(timeline.includes('C:start'), true);
+    expect.toEqual(timeline.includes('D:start'), true);
+    expect.toEqual(timeline.indexOf('C:start') > timeline.indexOf('B:error'), true);
+    expect.toEqual(timeline.indexOf('D:start') > timeline.indexOf('C:end'), true);
   });
 
 export async function run() {

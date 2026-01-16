@@ -16,10 +16,10 @@ import {
   AnthropicProvider,
   MonitorToolExecutedEvent,
   MonitorTodoReminderEvent,
-  MonitorEvent,
+  ControlEvent,
 } from '../../../src';
 import { loadIntegrationConfig, TEST_ROOT } from '../../helpers/fixtures';
-import { ensureCleanDir, wait, collectEvents } from '../../helpers/setup';
+import { ensureCleanDir, wait } from '../../helpers/setup';
 import { TestRunner, expect } from '../../helpers/utils';
 
 const runner = new TestRunner('集成测试 - Room 协作');
@@ -43,13 +43,11 @@ function plannerConfig(basePrompt: string): string {
     'You are the tech planner coordinating a room of agents.',
     'Convert high-level goals into concrete tasks and keep todos updated.',
     basePrompt,
-  ].join('
-');
+  ].join('\n');
 }
 
 runner.test('Room 多代理协作保持事件与Todo一致', async () => {
-  console.log('
-[Room协作测试] 场景目标:');
+  console.log('\n[Room协作测试] 场景目标:');
   console.log('  1) Planner 与 Executor 通过 Room @mention 协作完成文件与 todo 更新');
   console.log('  2) 验证 tool_executed / todo_reminder / permission 事件链路正常');
   console.log('  3) Fork Planner 后仍可保持历史上下文');
@@ -80,8 +78,7 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
       systemPrompt: [
         'You execute planner requests precisely.',
         'When updating files use fs_* tools and log results to ResumeChecklist todo.',
-      ].join('
-'),
+      ].join('\n'),
       tools: ['fs_read', 'fs_write', 'todo_write', 'todo_read'],
       runtime: { todo: { enabled: true, reminderOnStart: false } },
       permission: { mode: 'approval', requireApprovalTools: ['fs_write'] as const },
@@ -132,6 +129,7 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   const plannerTools: MonitorToolExecutedEvent[] = [];
   const devTools: MonitorToolExecutedEvent[] = [];
   const devReminders: MonitorTodoReminderEvent[] = [];
+  const devControlEvents: ControlEvent[] = [];
 
   const detachPlannerTool = planner.on('tool_executed', (evt: MonitorToolExecutedEvent) => {
     plannerTools.push(evt);
@@ -142,25 +140,27 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   const detachReminders = dev.on('todo_reminder', (evt: MonitorTodoReminderEvent) => {
     devReminders.push(evt);
   });
+  const detachPermissionRequired = dev.on('permission_required', async (evt) => {
+    devControlEvents.push(evt);
+    await evt.respond('allow', { note: '允许执行写入' });
+  });
+  const detachPermissionDecided = dev.on('permission_decided', (evt) => {
+    devControlEvents.push(evt);
+  });
 
   const targetFile = path.join(devWorkDir, 'ROOM_CHECK.md');
-  fs.writeFileSync(targetFile, '初始内容
-');
+  fs.writeFileSync(targetFile, '初始内容\n');
+  fs.writeFileSync(path.join(devWorkDir, 'README.md'), 'Room collaboration checklist.\n');
 
   await room.say('planner', '@dev 请创建 ResumeChecklist todo，并概述需要修改的 README 要点。');
   await wait(4000);
+  await room.say('dev', '@planner 请确认已收到协作请求并记录当前进度。');
+  await wait(2000);
 
   const devTodosStage1 = dev.getTodos();
   expect.toBeTruthy(devTodosStage1.some((todo) => todo.title.includes('ResumeChecklist')));
 
   await room.say('planner', '@dev 请将 ROOM_CHECK.md 内容改写，并在 todo 中标记进行中。');
-  await wait(2000);
-
-  const permissionEvents = await collectEvents(dev, ['control'], (event) => event.type === 'permission_required');
-  const permissionEvent = permissionEvents[0] as any;
-  const permissionId = permissionEvent.callId || permissionEvent.id || permissionEvent.permissionId;
-  expect.toBeTruthy(permissionId);
-  await dev.decide(permissionId, 'allow', '允许执行写入');
   await wait(4000);
 
   const fileAfter = fs.readFileSync(targetFile, 'utf-8');
@@ -176,10 +176,20 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   expect.toBeGreaterThanOrEqual(plannerTools.length, 1);
   expect.toBeGreaterThanOrEqual(devTools.length, 1);
   expect.toBeGreaterThanOrEqual(devReminders.length, 0);
+  expect.toBeGreaterThanOrEqual(
+    devControlEvents.filter((evt) => evt.type === 'permission_required').length,
+    1
+  );
+  expect.toBeGreaterThanOrEqual(
+    devControlEvents.filter((evt) => evt.type === 'permission_decided').length,
+    1
+  );
 
   detachPlannerTool();
   detachDevTool();
   detachReminders();
+  detachPermissionRequired();
+  detachPermissionDecided();
 
   await pool.delete('agt:planner');
   await pool.delete('agt:dev');

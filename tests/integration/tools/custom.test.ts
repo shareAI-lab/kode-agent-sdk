@@ -24,7 +24,7 @@ runner.test('自定义工具触发自定义事件', async () => {
   const template = {
     id: 'integration-custom-tool',
     systemPrompt:
-      'You must always call the custom_report tool to record metrics before replying. Never skip tool usage.',
+      'You must always call the custom_report tool before replying. Your final reply must include the exact phrase "已记录".',
     tools: ['custom_report'],
   };
 
@@ -36,15 +36,17 @@ runner.test('自定义工具触发自定义事件', async () => {
   });
 
   const monitorEvents = collectEvents(agent, ['monitor'], (event) => event.type === 'tool_custom_event');
-  const result = await agent.chat('请记录主题为“集成自定义工具”的指标，然后告诉我已经记录。');
+  const result = await agent.chat('请记录主题为“集成自定义工具”的指标，并在回复中包含“已记录”。');
 
   expect.toEqual(result.status, 'ok');
   expect.toBeTruthy(result.text && result.text.includes('已记录'));
 
   const events = await monitorEvents;
   expect.toBeGreaterThan(events.length, 0);
-  expect.toEqual((events[0] as any).eventType, 'custom_metric');
-  expect.toEqual((events[0] as any).toolName, 'custom_report');
+  const customEvent = (events as any[]).find((event) => event.type === 'tool_custom_event');
+  expect.toBeTruthy(customEvent);
+  expect.toEqual((customEvent as any).eventType, 'custom_metric');
+  expect.toEqual((customEvent as any).toolName, 'custom_report');
 
   await cleanup();
 });

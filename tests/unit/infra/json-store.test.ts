@@ -28,7 +28,20 @@ runner
     const loadedMessages = await store.loadMessages('agent');
     expect.toEqual(loadedMessages.length, 1);
 
-    await store.saveToolCallRecords('agent', [{ id: 'tool-1', name: 'fs_read', args: {}, outcome: { ok: true } }]);
+    const now = Date.now();
+    await store.saveToolCallRecords('agent', [
+      {
+        id: 'tool-1',
+        name: 'fs_read',
+        input: {},
+        state: 'COMPLETED',
+        approval: { required: false },
+        result: { ok: true },
+        createdAt: now,
+        updatedAt: now,
+        auditTrail: [],
+      },
+    ]);
     const records = await store.loadToolCallRecords('agent');
     expect.toEqual(records.length, 1);
 
@@ -111,7 +124,16 @@ runner
     const snapshot = await store.loadSnapshot('agent', 'snap-1');
     expect.toBeTruthy(snapshot);
 
-    await store.saveInfo('agent', { agentId: 'agent', templateId: 'tpl', metadata: {} });
+    await store.saveInfo('agent', {
+      agentId: 'agent',
+      templateId: 'tpl',
+      createdAt: new Date().toISOString(),
+      lineage: [],
+      configVersion: 'test',
+      messageCount: 0,
+      lastSfpIndex: 0,
+      metadata: {},
+    });
     const info = await store.loadInfo('agent');
     expect.toEqual(info?.templateId, 'tpl');
 

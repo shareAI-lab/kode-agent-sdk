@@ -17,7 +17,9 @@ runner.test('Todo CRUD 持久化并在 Resume 后可恢复', async () => {
   const harness = await IntegrationHarness.create({ customTemplate });
   const agent = harness.getAgent();
   const storeDir = harness.getStoreDir();
-  expect.toBeTruthy(storeDir, 'Store 目录未初始化');
+  if (!storeDir) {
+    throw new Error('Store 目录未初始化');
+  }
 
   await agent.setTodos([{ id: 'todo-1', title: '完成集成测试', status: 'pending' }]);
   await agent.updateTodo({ id: 'todo-1', title: '完成集成测试', status: 'in_progress' });
