@@ -136,6 +136,21 @@ export class EventBus {
     return last?.bookmark;
   }
 
+  syncCursor(bookmark?: Bookmark): void {
+    if (!bookmark) return;
+    const nextSeq = bookmark.seq + 1;
+    if (this.seq < nextSeq) {
+      this.seq = nextSeq;
+    }
+    const timelineCursor = this.timeline.length
+      ? this.timeline[this.timeline.length - 1].cursor + 1
+      : 0;
+    const nextCursor = Math.max(this.cursor, nextSeq, timelineCursor);
+    if (this.cursor < nextCursor) {
+      this.cursor = nextCursor;
+    }
+  }
+
   reset() {
     this.cursor = 0;
     this.seq = 0;

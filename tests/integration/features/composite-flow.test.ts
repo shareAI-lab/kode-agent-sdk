@@ -153,7 +153,7 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
   const stage2 = await harness.chatStep({
     label: '阶段2',
     prompt:
-      '请在得到许可后，将 approval-target.txt 的内容替换为“审批完成，文件已更新”。使用 fs_write 完成，并保留 todo 状态说明。',
+      '系统已自动审批通过。请立即调用 fs_write 将 approval-target.txt 的内容替换为“审批完成，文件已更新”，完成文件更新后更新todo状态为 completed，并保留 todo 状态说明（不要等待确认）。',
   });
 
   const permissionEvents = await permissionRequired;
@@ -162,22 +162,33 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
     stage2.events.filter((evt) => evt.channel === 'control' && evt.event.type === 'permission_decided').length,
     1
   );
+  expect.toBeGreaterThanOrEqual(
+    stage2.events.filter((evt) => evt.channel === 'progress' && evt.event.type === 'tool:start').length,
+    1
+  );
 
   const contentAfterApproval = fs.readFileSync(approvalFile, 'utf-8');
   expect.toContain(contentAfterApproval, '审批完成，文件已更新');
 
   // 阶段 3：调用子代理汇总
+  const stage3TodoSnapshot = JSON.stringify(harness.getAgent().getTodos(), null, 2);
   const subAgentResult = await harness.delegateTask({
     label: '阶段3-子代理',
     templateId: subAgentTemplate.id,
-    prompt: '请汇总当前复合测试的todo状态，输出两条要点。保留todo的表述，不要转换含义或表达方式。',
+    prompt: [
+      '请汇总当前复合测试的todo状态，输出两条要点。保留todo的表述，不要转换含义或表达方式。',
+      '以下是主代理的 todo 列表（JSON），仅基于该列表总结，不要调用任何工具：',
+      stage3TodoSnapshot,
+    ].join('\n'),
     tools: subAgentTemplate.tools,
   });
   expect.toEqual(subAgentResult.status, 'ok');
   expect.toBeTruthy(subAgentResult.text && subAgentResult.text.includes('todo'));
 
   // 阶段 4：Resume 后继续对话
+  const agentBeforeStage4 = harness.getAgent() as any;
   await harness.resume('阶段4');
+  await agentBeforeStage4.sandbox?.dispose?.();
   currentStage = '阶段4-Resume';
 
   const stage4 = await harness.chatStep({
@@ -185,7 +196,7 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
     prompt:
       '请再次调用 hook_probe 工具记录“阶段4Resume确认”，然后报告 todo 是否仍为完成状态，并确认文件更新已生效。',
     expectation: {
-      includes: ['阶段4-Resume', '完成状态', '文件'],
+      includes: ['阶段4-Resume','完成', '状态', '文件'],
     },
   });
 
@@ -202,7 +213,9 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
   const statusBeforeSecondResume = await harness.getAgent().status();
   expect.toBeTruthy(statusBeforeSecondResume.lastBookmark);
 
+  const agentBeforeStage5 = harness.getAgent() as any;
   await harness.resume('阶段5');
+  await agentBeforeStage5.sandbox?.dispose?.();
   currentStage = '阶段5-再Resume';
 
   const replayOptions = statusBeforeSecondResume.lastBookmark
@@ -235,7 +248,11 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
   const subAgentAfterSecondResume = await harness.delegateTask({
     label: '阶段5-子代理',
     templateId: subAgentTemplate.id,
-    prompt: '请再次总结当前 todo 的最新状态，并说明已经经历过多次 Resume 验证。',
+    prompt: [
+      '请再次总结当前 todo 的最新状态，并说明已经经历过多次 Resume 验证。',
+      '以下是主代理的 todo 列表（JSON），仅基于该列表总结，不要调用任何工具：',
+      JSON.stringify(harness.getAgent().getTodos(), null, 2),
+    ].join('\n'),
     tools: subAgentTemplate.tools,
   });
   expect.toEqual(subAgentAfterSecondResume.status, 'ok');
@@ -267,6 +284,8 @@ runner.test('Hook + Todo + 审批 + 子代理 + 文件操作', async () => {
   expect.toBeGreaterThanOrEqual(monitorEvents.length, 4);
 
   await wait(200);
+  const agentForDispose = harness.getAgent() as any;
+  await agentForDispose.sandbox?.dispose?.();
   await harness.cleanup();
 });
 

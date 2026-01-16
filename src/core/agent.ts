@@ -380,16 +380,28 @@ export class Agent {
   }
 
   async *chatStream(input: string, opts?: StreamOptions): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
-    const since = opts?.since ?? this.events.getLastBookmark();
+    const since = opts?.since ?? this.lastBookmark ?? this.events.getLastBookmark();
     await this.send(input);
 
     const subscription = this.events.subscribeProgress({ since, kinds: opts?.kinds });
+    let seenNonDone = false;
     for await (const event of subscription) {
-      yield event;
       if (event.event.type === 'done') {
+        if (since && event.bookmark.seq <= since.seq) {
+          continue;
+        }
+        if (!seenNonDone) {
+          yield event;
+          this.lastBookmark = event.bookmark;
+          break;
+        }
+        yield event;
         this.lastBookmark = event.bookmark;
         break;
       }
+
+      seenNonDone = true;
+      yield event;
     }
   }
 
@@ -655,6 +667,15 @@ export class Agent {
       throw new ResumeError('CORRUPTED_DATA', `Agent metadata incomplete for: ${agentId}`);
     }
 
+    let resumeBookmark: Bookmark | undefined = info.lastBookmark;
+    if (!resumeBookmark) {
+      for await (const entry of store.readEvents(agentId, { channel: 'progress' })) {
+        if (entry.event.type === 'done') {
+          resumeBookmark = entry.bookmark;
+        }
+      }
+    }
+
     const templateId = metadata.templateId;
     let template: AgentTemplateDefinition;
     try {
@@ -732,6 +753,11 @@ export class Agent {
     agent.stepCount = messages.filter((m) => m.role === 'user').length;
     const toolRecords = await store.loadToolCallRecords(agentId);
     agent.toolRecords = new Map(toolRecords.map((record) => [record.id, agent.normalizeToolRecord(record)]));
+
+    if (resumeBookmark) {
+      agent.lastBookmark = resumeBookmark;
+      agent.events.syncCursor(resumeBookmark);
+    }
 
     if (opts?.strategy === 'crash') {
       const sealed = await agent.autoSealIncompleteCalls();
@@ -987,6 +1013,7 @@ export class Agent {
         this.lastSfpIndex = this.messages.length - 1;
       }
 
+      const previousBookmark = this.lastBookmark;
       const envelope = this.events.emitProgress({
         channel: 'progress',
         type: 'done',
@@ -998,6 +1025,9 @@ export class Agent {
       this.stepCount++;
       this.scheduler.notifyStep(this.stepCount);
       this.todoManager.onStep();
+      if (!previousBookmark || previousBookmark.seq !== this.lastBookmark.seq) {
+        await this.persistInfo();
+      }
       this.events.emitMonitor({ channel: 'monitor', type: 'step_complete', step: this.stepCount, bookmark: envelope.bookmark });
     } catch (error: any) {
       this.events.emitMonitor({
@@ -1009,6 +1039,7 @@ export class Agent {
         detail: { stack: error?.stack },
       });
       if (!doneEmitted) {
+        const previousBookmark = this.lastBookmark;
         const envelope = this.events.emitProgress({
           channel: 'progress',
           type: 'done',
@@ -1020,6 +1051,9 @@ export class Agent {
         this.stepCount++;
         this.scheduler.notifyStep(this.stepCount);
         this.todoManager.onStep();
+        if (!previousBookmark || previousBookmark.seq !== this.lastBookmark.seq) {
+          await this.persistInfo();
+        }
       }
     } finally {
       this.setState('READY');
@@ -1407,6 +1441,7 @@ export class Agent {
       meta,
     };
     this.updateToolRecord(id, { state: 'APPROVAL_REQUIRED', approval }, 'awaiting approval');
+    await this.persistToolRecords();
 
     return new Promise((resolve) => {
       this.pendingPermissions.set(id, {
