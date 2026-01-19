@@ -21,3 +21,39 @@ export function assert(condition: any, code: ResumeErrorCode, message: string): 
     throw new ResumeError(code, message);
   }
 }
+
+export class MultimodalValidationError extends Error {
+  readonly code = 'ERR_MULTIMODAL_INVALID';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'MultimodalValidationError';
+  }
+}
+
+export class UnsupportedContentBlockError extends Error {
+  readonly code = 'ERR_CONTENTBLOCK_UNSUPPORTED';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedContentBlockError';
+  }
+}
+
+export class UnsupportedProviderError extends Error {
+  readonly code = 'ERR_PROVIDER_UNSUPPORTED';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnsupportedProviderError';
+  }
+}
+
+export class ProviderCapabilityError extends Error {
+  readonly code = 'ERR_PROVIDER_CAPABILITY';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderCapabilityError';
+  }
+}

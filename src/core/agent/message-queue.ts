@@ -1,5 +1,6 @@
-import { Message } from '../types';
+import { ContentBlock, Message } from '../types';
 import { ReminderOptions } from '../types';
+import { MultimodalValidationError } from '../errors';
 
 export type PendingKind = 'user' | 'reminder';
 
@@ -27,14 +28,22 @@ export class MessageQueue {
 
   constructor(private readonly options: MessageQueueOptions) {}
 
-  send(text: string, opts: SendOptions = {}): string {
+  send(content: string | ContentBlock[], opts: SendOptions = {}): string {
     const kind: PendingKind = opts.kind ?? 'user';
-    const payload = kind === 'reminder' ? this.options.wrapReminder(text, opts.reminder) : text;
+    const isText = typeof content === 'string';
+    if (kind === 'reminder' && !isText) {
+      throw new MultimodalValidationError('Reminder messages must be plain text.');
+    }
+    const payload = isText
+      ? kind === 'reminder'
+        ? this.options.wrapReminder(content, opts.reminder)
+        : content
+      : content;
     const id = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     this.pending.push({
       message: {
         role: 'user',
-        content: [{ type: 'text', text: payload }],
+        content: isText ? [{ type: 'text', text: payload as string }] : (payload as ContentBlock[]),
       },
       kind,
       metadata: { id, ...(opts.metadata || {}) },

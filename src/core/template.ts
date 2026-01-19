@@ -44,6 +44,9 @@ export interface AgentTemplateDefinition {
 
 export interface TemplateRuntimeConfig {
   exposeThinking?: boolean;
+  retainThinking?: boolean;
+  multimodalContinuation?: 'history';
+  multimodalRetention?: { keepRecent?: number };
   todo?: TodoConfig;
   subagents?: SubAgentConfig;
   metadata?: Record<string, any>;

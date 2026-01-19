@@ -12,6 +12,7 @@ class MemoryStore implements Store {
   historyWindows = new Map<string, HistoryWindow[]>();
   compressionRecords = new Map<string, CompressionRecord[]>();
   recoveredFiles = new Map<string, RecoveredFile[]>();
+  mediaCache = new Map<string, any[]>();
   snapshots = new Map<string, Map<string, any>>();
   info = new Map<string, any>();
 
@@ -66,6 +67,12 @@ class MemoryStore implements Store {
   }
   async loadRecoveredFiles(agentId: string): Promise<RecoveredFile[]> {
     return this.recoveredFiles.get(agentId) || [];
+  }
+  async saveMediaCache(agentId: string, records: any[]): Promise<void> {
+    this.mediaCache.set(agentId, records);
+  }
+  async loadMediaCache(agentId: string): Promise<any[]> {
+    return this.mediaCache.get(agentId) || [];
   }
   async saveSnapshot(agentId: string, snapshot: any): Promise<void> {
     const map = this.snapshots.get(agentId) || new Map<string, any>();
@@ -171,6 +178,58 @@ runner
     const recovered = await manager.loadRecoveredFiles();
     expect.toEqual(recovered.length, 1);
     expect.toContain(recovered[0].content, '# Notes');
+  })
+
+  .test('压缩时保留最近N个多模态块', async () => {
+    const store = new MemoryStore();
+    const manager = new ContextManager(store, 'agent-3', {
+      maxTokens: 1,
+      compressToTokens: 1,
+      multimodalRetention: { keepRecent: 2 },
+    });
+
+    const messages: Message[] = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'image-1' },
+          { type: 'image', url: 'http://example.com/1.png', mime_type: 'image/png' },
+        ],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'ack-1' }] },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'image-2' },
+          { type: 'image', url: 'http://example.com/2.png', mime_type: 'image/png' },
+        ],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'ack-2' }] },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'image-3' },
+          { type: 'image', url: 'http://example.com/3.png', mime_type: 'image/png' },
+        ],
+      },
+      { role: 'assistant', content: [{ type: 'text', text: 'ack-3' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'filler-1' }] },
+      { role: 'assistant', content: [{ type: 'text', text: 'filler-2' }] },
+    ];
+
+    const result = await manager.compress(messages, [], undefined, undefined);
+    expect.toBeTruthy(result);
+
+    const retainedImages = result!.retainedMessages
+      .flatMap((msg) => msg.content)
+      .filter((block) => block.type === 'image')
+      .map((block) => (block as any).url);
+
+    expect.toContain(retainedImages, 'http://example.com/2.png');
+    expect.toContain(retainedImages, 'http://example.com/3.png');
+
+    const summaryText = (result!.summary.content[0] as any).text;
+    expect.toContain(summaryText, '[image-summary id=http://example.com/1.png');
   })
 
   .test('在token足够时不会压缩', async () => {

@@ -47,7 +47,14 @@ export { FileCheckpointer, RedisCheckpointer } from './core/checkpointers';
 
 // Types
 export * from './core/types';
-export { ResumeError, ResumeErrorCode } from './core/errors';
+export {
+  ResumeError,
+  ResumeErrorCode,
+  MultimodalValidationError,
+  UnsupportedContentBlockError,
+  UnsupportedProviderError,
+  ProviderCapabilityError,
+} from './core/errors';
 
 // Infrastructure
 export { Store, JSONStore } from './infra/store';
