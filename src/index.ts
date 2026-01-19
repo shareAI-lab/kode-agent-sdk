@@ -76,7 +76,9 @@ export {
   ModelResponse,
   ModelStreamChunk,
   AnthropicProvider,
+  AnthropicProviderOptions,
   OpenRouterProvider,
+  OpenRouterProviderOptions,
   createModelProvider,
 } from './infra/provider';
 export { SandboxFactory } from './infra/sandbox-factory';

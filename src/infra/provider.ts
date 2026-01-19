@@ -1,6 +1,6 @@
 import { Message, ContentBlock } from '../core/types';
 import { Configurable } from '../core/config';
-import { AnthropicProvider, OpenRouterProvider } from './providers';
+import { AnthropicProvider, AnthropicProviderOptions, OpenRouterProvider, OpenRouterProviderOptions } from './providers';
 
 export interface ModelResponse {
   role: 'assistant';
@@ -39,7 +39,7 @@ export interface ModelProvider extends Configurable<ModelConfig> {
   readonly model: string;
   readonly maxWindowSize: number;
   readonly maxOutputTokens: number;
-  readonly temperature: number;
+  readonly temperature?: number;
 
   complete(
     messages: Message[],
@@ -68,22 +68,26 @@ export interface ModelProvider extends Configurable<ModelConfig> {
 export function createModelProvider(config: ModelConfig): ModelProvider {
   switch (config.provider) {
     case 'anthropic':
-      return new AnthropicProvider(
-        config.apiKey!,
-        config.model,
-        config.baseUrl
-      );
+      return new AnthropicProvider({
+        apiKey: config.apiKey!,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        maxOutputTokens: config.maxTokens,
+        temperature: config.temperature,
+      });
     case 'openrouter':
-      return new OpenRouterProvider(
-        config.apiKey!,
-        config.model,
-        config.baseUrl
-      );
+      return new OpenRouterProvider({
+        apiKey: config.apiKey!,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        maxOutputTokens: config.maxTokens,
+        temperature: config.temperature,
+      });
     default:
       throw new Error(`Unsupported provider: ${config.provider}`);
   }
 }
 
-// Re-export providers
-export { AnthropicProvider, OpenRouterProvider };
+// Re-export providers and options
+export { AnthropicProvider, AnthropicProviderOptions, OpenRouterProvider, OpenRouterProviderOptions };
 

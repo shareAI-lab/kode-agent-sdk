@@ -1,18 +1,43 @@
 import { Message, ContentBlock } from '../../core/types';
 import { ModelProvider, ModelResponse, ModelStreamChunk, ModelConfig } from '../provider';
 
+export interface OpenRouterProviderOptions {
+  apiKey: string;
+  model: string;
+  baseUrl?: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+}
+
 export class OpenRouterProvider implements ModelProvider {
   readonly maxWindowSize = 200_000;
-  readonly maxOutputTokens = 4096;
-  readonly temperature = 0.7;
+  readonly maxOutputTokens: number;
+  readonly temperature?: number;
   readonly model: string;
 
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+
+  constructor(options: OpenRouterProviderOptions);
+  constructor(apiKey: string, model: string, baseUrl?: string);
   constructor(
-    private apiKey: string,
-    model: string,
-    private baseUrl: string = 'https://openrouter.ai/api/v1',
+    optionsOrApiKey: OpenRouterProviderOptions | string,
+    model?: string,
+    baseUrl?: string
   ) {
-    this.model = model;
+    if (typeof optionsOrApiKey === 'string') {
+      this.apiKey = optionsOrApiKey;
+      this.model = model!;
+      this.baseUrl = baseUrl || 'https://openrouter.ai/api/v1';
+      this.maxOutputTokens = 8192;
+      this.temperature = undefined;
+    } else {
+      this.apiKey = optionsOrApiKey.apiKey;
+      this.model = optionsOrApiKey.model;
+      this.baseUrl = optionsOrApiKey.baseUrl || 'https://openrouter.ai/api/v1';
+      this.maxOutputTokens = optionsOrApiKey.maxOutputTokens ?? 8192;
+      this.temperature = optionsOrApiKey.temperature;
+    }
   }
 
   async complete(
@@ -32,7 +57,12 @@ export class OpenRouterProvider implements ModelProvider {
 
     const maxTokens = opts?.maxTokens ?? this.maxOutputTokens;
     if (typeof maxTokens === 'number') body.max_tokens = maxTokens;
-    if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+
+    if (opts?.temperature !== undefined) {
+      body.temperature = opts.temperature;
+    } else if (this.temperature !== undefined) {
+      body.temperature = this.temperature;
+    }
 
     const tools = toOpenAITools(opts?.tools);
     if (tools.length > 0) {
@@ -40,35 +70,60 @@ export class OpenRouterProvider implements ModelProvider {
       body.tool_choice = 'auto';
     }
 
-    const response = await fetch(`${stripTrailingSlash(this.baseUrl)}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const MAX_RETRIES = 3;
+    let lastError: Error | null = null;
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenRouter API error: ${response.status} ${error}`);
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetch(`${stripTrailingSlash(this.baseUrl)}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (response.ok) {
+          const data: any = await response.json();
+          const msg = data?.choices?.[0]?.message;
+          const blocks = openAIMessageToContentBlocks(msg);
+
+          return {
+            role: 'assistant',
+            content: blocks,
+            usage: data?.usage
+              ? {
+                  input_tokens: data.usage.prompt_tokens ?? 0,
+                  output_tokens: data.usage.completion_tokens ?? 0,
+                }
+              : undefined,
+            stop_reason: data?.choices?.[0]?.finish_reason,
+          };
+        }
+
+        const errorText = await response.text();
+
+        if (response.status === 429 && attempt < MAX_RETRIES - 1) {
+          const retryAfter = response.headers.get('retry-after');
+          const waitTime = retryAfter
+            ? parseInt(retryAfter, 10) * 1000
+            : Math.min(1000 * Math.pow(2, attempt), 10000);
+
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue;
+        }
+
+        throw new Error(`OpenRouter API error: ${response.status} ${errorText}`);
+      } catch (e) {
+        lastError = e instanceof Error ? e : new Error(String(e));
+        if (attempt === MAX_RETRIES - 1) {
+          throw lastError;
+        }
+      }
     }
 
-    const data: any = await response.json();
-    const msg = data?.choices?.[0]?.message;
-    const blocks = openAIMessageToContentBlocks(msg);
-
-    return {
-      role: 'assistant',
-      content: blocks,
-      usage: data?.usage
-        ? {
-            input_tokens: data.usage.prompt_tokens ?? 0,
-            output_tokens: data.usage.completion_tokens ?? 0,
-          }
-        : undefined,
-      stop_reason: data?.choices?.[0]?.finish_reason,
-    };
+    throw lastError || new Error('OpenRouter API request failed');
   }
 
   async *stream(
@@ -89,7 +144,12 @@ export class OpenRouterProvider implements ModelProvider {
 
     const maxTokens = opts?.maxTokens ?? this.maxOutputTokens;
     if (typeof maxTokens === 'number') body.max_tokens = maxTokens;
-    if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+
+    if (opts?.temperature !== undefined) {
+      body.temperature = opts.temperature;
+    } else if (this.temperature !== undefined) {
+      body.temperature = this.temperature;
+    }
 
     const tools = toOpenAITools(opts?.tools);
     if (tools.length > 0) {
@@ -97,7 +157,6 @@ export class OpenRouterProvider implements ModelProvider {
       body.tool_choice = 'auto';
     }
 
-    // Retry logic for rate limiting (429) errors
     const MAX_RETRIES = 3;
     let lastError: Error | null = null;
     let response: Response | null = null;
@@ -119,7 +178,6 @@ export class OpenRouterProvider implements ModelProvider {
 
         const errorText = await response.text();
 
-        // Only retry on 429 (rate limit) errors
         if (response.status === 429 && attempt < MAX_RETRIES - 1) {
           const retryAfter = response.headers.get('retry-after');
           const waitTime = retryAfter
@@ -223,7 +281,6 @@ export class OpenRouterProvider implements ModelProvider {
           const choice = event?.choices?.[0];
           const delta = choice?.delta;
 
-          // Text streaming
           if (typeof delta?.content === 'string' && delta.content.length > 0) {
             const started = ensureTextStarted();
             if (started) {
@@ -236,7 +293,6 @@ export class OpenRouterProvider implements ModelProvider {
             };
           }
 
-          // Tool call streaming
           const toolCalls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : [];
           for (const toolCall of toolCalls) {
             const openAiToolIndex: number = typeof toolCall?.index === 'number' ? toolCall.index : 0;
@@ -275,7 +331,6 @@ export class OpenRouterProvider implements ModelProvider {
             }
           }
 
-          // Usage (typically only appears at end when include_usage=true)
           if (event?.usage) {
             const inputTokens = event.usage.prompt_tokens ?? 0;
             const outputTokens = event.usage.completion_tokens ?? 0;
@@ -288,7 +343,6 @@ export class OpenRouterProvider implements ModelProvider {
         }
       }
     } finally {
-      // Close any started blocks so the Agent can finalize buffers.
       if (textBlockIndex !== null) {
         yield { type: 'content_block_stop', index: textBlockIndex };
       }
@@ -346,10 +400,9 @@ function blocksToOpenAIContent(blocks: ContentBlock[]): string | OpenAIChatMessa
       continue;
     }
 
-    if ((block as any).type === 'image_url') {
-      const imgBlock = block as any;
-      if (typeof imgBlock.image_url?.url === 'string' && imgBlock.image_url.url.length > 0) {
-        parts.push({ type: 'image_url', image_url: { url: imgBlock.image_url.url } });
+    if (block.type === 'image_url') {
+      if (typeof block.image_url?.url === 'string' && block.image_url.url.length > 0) {
+        parts.push({ type: 'image_url', image_url: { url: block.image_url.url } });
         hasImages = true;
       }
     }

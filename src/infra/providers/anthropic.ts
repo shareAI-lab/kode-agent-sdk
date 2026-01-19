@@ -1,18 +1,43 @@
 import { Message } from '../../core/types';
 import { ModelProvider, ModelResponse, ModelStreamChunk, ModelConfig } from '../provider';
 
+export interface AnthropicProviderOptions {
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+  maxOutputTokens?: number;
+  temperature?: number;
+}
+
 export class AnthropicProvider implements ModelProvider {
   readonly maxWindowSize = 200_000;
-  readonly maxOutputTokens = 4096;
-  readonly temperature = 0.7;
+  readonly maxOutputTokens: number;
+  readonly temperature?: number;
   readonly model: string;
 
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+
+  constructor(options: AnthropicProviderOptions);
+  constructor(apiKey: string, model?: string, baseUrl?: string);
   constructor(
-    private apiKey: string,
-    model: string = 'claude-3-5-sonnet-20241022',
-    private baseUrl: string = 'https://api.anthropic.com'
+    optionsOrApiKey: AnthropicProviderOptions | string,
+    model?: string,
+    baseUrl?: string
   ) {
-    this.model = model;
+    if (typeof optionsOrApiKey === 'string') {
+      this.apiKey = optionsOrApiKey;
+      this.model = model || 'claude-sonnet-4-5-20250929';
+      this.baseUrl = baseUrl || 'https://api.anthropic.com';
+      this.maxOutputTokens = 8192;
+      this.temperature = undefined;
+    } else {
+      this.apiKey = optionsOrApiKey.apiKey;
+      this.model = optionsOrApiKey.model || 'claude-sonnet-4-5-20250929';
+      this.baseUrl = optionsOrApiKey.baseUrl || 'https://api.anthropic.com';
+      this.maxOutputTokens = optionsOrApiKey.maxOutputTokens ?? 8192;
+      this.temperature = optionsOrApiKey.temperature;
+    }
   }
 
   async complete(
@@ -28,10 +53,14 @@ export class AnthropicProvider implements ModelProvider {
     const body: any = {
       model: this.model,
       messages: this.formatMessages(messages),
-      max_tokens: opts?.maxTokens || 4096,
+      max_tokens: opts?.maxTokens ?? this.maxOutputTokens,
     };
 
-    if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    if (opts?.temperature !== undefined) {
+      body.temperature = opts.temperature;
+    } else if (this.temperature !== undefined) {
+      body.temperature = this.temperature;
+    }
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
 
@@ -71,11 +100,15 @@ export class AnthropicProvider implements ModelProvider {
     const body: any = {
       model: this.model,
       messages: this.formatMessages(messages),
-      max_tokens: opts?.maxTokens || 4096,
+      max_tokens: opts?.maxTokens ?? this.maxOutputTokens,
       stream: true,
     };
 
-    if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    if (opts?.temperature !== undefined) {
+      body.temperature = opts.temperature;
+    } else if (this.temperature !== undefined) {
+      body.temperature = this.temperature;
+    }
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
 

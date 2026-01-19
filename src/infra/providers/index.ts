@@ -1,2 +1,2 @@
-export { AnthropicProvider } from './anthropic';
-export { OpenRouterProvider } from './openrouter';
+export { AnthropicProvider, AnthropicProviderOptions } from './anthropic';
+export { OpenRouterProvider, OpenRouterProviderOptions } from './openrouter';

@@ -4,6 +4,7 @@ export type MessageRole = 'user' | 'assistant' | 'system';
 
 export type ContentBlock =
   | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
   | { type: 'tool_use'; id: string; name: string; input: any }
   | { type: 'tool_result'; tool_use_id: string; content: any; is_error?: boolean };
 
