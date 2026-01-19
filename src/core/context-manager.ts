@@ -50,7 +50,7 @@ export class ContextManager {
   ) {
     this.maxTokens = opts?.maxTokens ?? 50_000;
     this.compressToTokens = opts?.compressToTokens ?? 30_000;
-    this.compressionModel = opts?.compressionModel ?? 'claude-3-haiku';
+    this.compressionModel = opts?.compressionModel ?? 'claude-haiku-4-5';
     this.compressionPrompt = opts?.compressionPrompt ?? 'Summarize the conversation history concisely';
   }
 

@@ -334,7 +334,7 @@ export class Agent {
       ? ensureModelFactory(deps.modelFactory)(config.modelConfig)
       : template.model
       ? ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model })
-      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-3-5-sonnet-20241022' });
+      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' });
 
     const resolvedTools = resolveTools(config, template, deps.toolRegistry, deps.templateRegistry);
 
@@ -678,7 +678,7 @@ export class Agent {
     }
     const model = metadata.modelConfig
       ? ensureModelFactory(deps.modelFactory)(metadata.modelConfig)
-      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model || 'claude-3-5-sonnet-20241022' });
+      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model || 'claude-sonnet-4-5-20250929' });
 
     const toolInstances = metadata.tools.map((descriptor) => {
       try {
@@ -1942,7 +1942,13 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
       if (!config.apiKey) {
         throw new Error('Anthropic provider requires apiKey');
       }
-      return new AnthropicProvider(config.apiKey, config.model, config.baseUrl);
+      return new AnthropicProvider({
+        apiKey: config.apiKey,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        maxOutputTokens: config.maxTokens,
+        temperature: config.temperature,
+      });
     }
     if (config.provider === 'openrouter') {
       if (!config.apiKey) {
@@ -1951,7 +1957,13 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
       if (!config.model) {
         throw new Error('OpenRouter provider requires model');
       }
-      return new OpenRouterProvider(config.apiKey, config.model, config.baseUrl);
+      return new OpenRouterProvider({
+        apiKey: config.apiKey,
+        model: config.model,
+        baseUrl: config.baseUrl,
+        maxOutputTokens: config.maxTokens,
+        temperature: config.temperature,
+      });
     }
     throw new Error(`Model factory not provided for provider: ${config.provider}`);
   };
