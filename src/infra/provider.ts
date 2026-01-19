@@ -1,5 +1,16 @@
 import { Message, ContentBlock, ImageContentBlock, FileContentBlock } from '../core/types';
 import { Configurable } from '../core/config';
+import type { ThinkingOptions, ReasoningTransport, MultimodalOptions } from './providers/types';
+
+// Re-export types from providers module for backward compatibility
+export type {
+  ThinkingOptions,
+  ReasoningTransport,
+  MultimodalOptions,
+  AnthropicProviderOptions,
+  OpenAIProviderOptions,
+  GeminiProviderOptions,
+} from './providers/types';
 
 export interface ModelResponse {
   role: 'assistant';
@@ -39,7 +50,7 @@ export interface UploadFileResult {
 }
 
 export interface ModelConfig {
-  provider: 'anthropic' | string;
+  provider: 'anthropic' | 'openai' | 'gemini' | string;
   model: string;
   baseUrl?: string;
   apiKey?: string;
@@ -55,6 +66,7 @@ export interface ModelConfig {
     maxBase64Bytes?: number;
     allowMimeTypes?: string[];
   };
+  thinking?: ThinkingOptions;
 }
 
 export interface ModelProvider extends Configurable<ModelConfig> {
@@ -71,6 +83,7 @@ export interface ModelProvider extends Configurable<ModelConfig> {
       temperature?: number;
       system?: string;
       stream?: boolean;
+      thinking?: ThinkingOptions;
     }
   ): Promise<ModelResponse>;
 
@@ -81,6 +94,7 @@ export interface ModelProvider extends Configurable<ModelConfig> {
       maxTokens?: number;
       temperature?: number;
       system?: string;
+      thinking?: ThinkingOptions;
     }
   ): AsyncIterable<ModelStreamChunk>;
 
@@ -131,6 +145,7 @@ export class AnthropicProvider implements ModelProvider {
       temperature?: number;
       system?: string;
       stream?: boolean;
+      thinking?: ThinkingOptions;
     }
   ): Promise<ModelResponse> {
     const body: any = {
@@ -143,12 +158,19 @@ export class AnthropicProvider implements ModelProvider {
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
-    if (this.reasoningTransport === 'provider' && !body.thinking) {
-      body.thinking = { type: 'enabled' };
+
+    // Build thinking config based on ThinkingOptions
+    const thinkingEnabled = opts?.thinking?.enabled ?? (this.reasoningTransport === 'provider');
+    if (thinkingEnabled && !body.thinking) {
+      const thinkingConfig: any = { type: 'enabled' };
+      if (opts?.thinking?.budgetTokens) {
+        thinkingConfig.budget_tokens = opts.thinking.budgetTokens;
+      }
+      body.thinking = thinkingConfig;
     }
 
     const betaEntries: string[] = [];
-    if (this.reasoningTransport === 'provider') {
+    if (thinkingEnabled) {
       betaEntries.push('interleaved-thinking-2025-05-14');
     }
     if (hasAnthropicFileBlocks(messages)) {
@@ -199,6 +221,7 @@ export class AnthropicProvider implements ModelProvider {
       maxTokens?: number;
       temperature?: number;
       system?: string;
+      thinking?: ThinkingOptions;
     }
   ): AsyncIterable<ModelStreamChunk> {
     const body: any = {
@@ -212,12 +235,19 @@ export class AnthropicProvider implements ModelProvider {
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
-    if (this.reasoningTransport === 'provider' && !body.thinking) {
-      body.thinking = { type: 'enabled' };
+
+    // Build thinking config based on ThinkingOptions
+    const thinkingEnabled = opts?.thinking?.enabled ?? (this.reasoningTransport === 'provider');
+    if (thinkingEnabled && !body.thinking) {
+      const thinkingConfig: any = { type: 'enabled' };
+      if (opts?.thinking?.budgetTokens) {
+        thinkingConfig.budget_tokens = opts.thinking.budgetTokens;
+      }
+      body.thinking = thinkingConfig;
     }
 
     const betaEntries: string[] = [];
-    if (this.reasoningTransport === 'provider') {
+    if (thinkingEnabled) {
       betaEntries.push('interleaved-thinking-2025-05-14');
     }
     if (hasAnthropicFileBlocks(messages)) {
@@ -536,6 +566,7 @@ export class OpenAIProvider implements ModelProvider {
       temperature?: number;
       system?: string;
       stream?: boolean;
+      thinking?: ThinkingOptions;
     }
   ): Promise<ModelResponse> {
     const responseApi = this.resolveOpenAIApi(messages);
@@ -629,6 +660,7 @@ export class OpenAIProvider implements ModelProvider {
       maxTokens?: number;
       temperature?: number;
       system?: string;
+      thinking?: ThinkingOptions;
     }
   ): AsyncIterable<ModelStreamChunk> {
     const responseApi = this.resolveOpenAIApi(messages);
@@ -880,6 +912,7 @@ export class OpenAIProvider implements ModelProvider {
       temperature?: number;
       system?: string;
       stream?: boolean;
+      thinking?: ThinkingOptions;
     }
   ): Promise<ModelResponse> {
     const input = buildOpenAIResponsesInput(messages, this.reasoningTransport);
@@ -892,6 +925,12 @@ export class OpenAIProvider implements ModelProvider {
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.maxTokens !== undefined) body.max_output_tokens = opts.maxTokens;
     if (opts?.system) body.instructions = opts.system;
+
+    // Apply reasoning_effort from ThinkingOptions for Responses API
+    if (opts?.thinking?.effort) {
+      body.reasoning = { effort: opts.thinking.effort };
+    }
+
     this.applyReasoningDefaults(body);
 
     const response = await fetch(
@@ -1028,6 +1067,7 @@ export class GeminiProvider implements ModelProvider {
       temperature?: number;
       system?: string;
       stream?: boolean;
+      thinking?: ThinkingOptions;
     }
   ): Promise<ModelResponse> {
     const body: any = {
@@ -1038,6 +1078,7 @@ export class GeminiProvider implements ModelProvider {
       maxTokens: opts?.maxTokens ?? this.maxOutputTokens,
       temperature: opts?.temperature ?? this.temperature,
       reasoningTransport: this.reasoningTransport,
+      thinking: opts?.thinking,
     }),
     };
 
@@ -1090,6 +1131,7 @@ export class GeminiProvider implements ModelProvider {
       maxTokens?: number;
       temperature?: number;
       system?: string;
+      thinking?: ThinkingOptions;
     }
   ): AsyncIterable<ModelStreamChunk> {
     const body: any = {
@@ -1100,6 +1142,7 @@ export class GeminiProvider implements ModelProvider {
       maxTokens: opts?.maxTokens ?? this.maxOutputTokens,
       temperature: opts?.temperature ?? this.temperature,
       reasoningTransport: this.reasoningTransport,
+      thinking: opts?.thinking,
     }),
     };
 
@@ -1455,6 +1498,7 @@ function buildGeminiRequestBody(
     maxTokens?: number;
     temperature?: number;
     reasoningTransport?: ModelConfig['reasoningTransport'];
+    thinking?: ThinkingOptions;
   }
 ): any {
   const systemInstruction = buildGeminiSystemInstruction(messages, opts.system, opts.reasoningTransport);
@@ -1464,6 +1508,16 @@ function buildGeminiRequestBody(
   const generationConfig: any = {};
   if (opts.temperature !== undefined) generationConfig.temperature = opts.temperature;
   if (opts.maxTokens !== undefined) generationConfig.maxOutputTokens = opts.maxTokens;
+
+  // Apply thinking options for Gemini
+  // - For Gemini 2.5 models: use thinkingBudget (token count)
+  // - For Gemini 3.x models: use thinkingLevel ('none' | 'low' | 'medium' | 'high')
+  if (opts.thinking?.budgetTokens !== undefined) {
+    generationConfig.thinkingBudget = opts.thinking.budgetTokens;
+  }
+  if (opts.thinking?.level !== undefined) {
+    generationConfig.thinkingLevel = opts.thinking.level.toUpperCase();
+  }
 
   const body: any = {
     contents,
