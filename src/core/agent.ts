@@ -36,7 +36,7 @@ import { AgentTemplateRegistry, AgentTemplateDefinition, PermissionConfig, SubAg
 import { Store } from '../infra/store';
 import { Sandbox, SandboxKind } from '../infra/sandbox';
 import { SandboxFactory } from '../infra/sandbox-factory';
-import { ModelProvider, ModelConfig, AnthropicProvider } from '../infra/provider';
+import { ModelProvider, ModelConfig, AnthropicProvider, OpenRouterProvider } from '../infra/provider';
 import { ToolRegistry, ToolInstance, ToolDescriptor } from '../tools/registry';
 import { Configurable } from './config';
 import { ContextManagerOptions } from './context-manager';
@@ -1943,6 +1943,15 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         throw new Error('Anthropic provider requires apiKey');
       }
       return new AnthropicProvider(config.apiKey, config.model, config.baseUrl);
+    }
+    if (config.provider === 'openrouter') {
+      if (!config.apiKey) {
+        throw new Error('OpenRouter provider requires apiKey');
+      }
+      if (!config.model) {
+        throw new Error('OpenRouter provider requires model');
+      }
+      return new OpenRouterProvider(config.apiKey, config.model, config.baseUrl);
     }
     throw new Error(`Model factory not provided for provider: ${config.provider}`);
   };
