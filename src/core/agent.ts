@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { createHash } from 'node:crypto';
 
 import {
   AgentEvent,
@@ -12,6 +13,7 @@ import {
   ControlEvent,
   HookDecision,
   Message,
+  MessageMetadata,
   MonitorEvent,
   ProgressEvent,
   ReminderOptions,
@@ -33,7 +35,7 @@ import { FilePool } from './file-pool';
 import Ajv, { ValidateFunction } from 'ajv';
 import { TodoService, TodoInput, TodoItem } from './todo';
 import { AgentTemplateRegistry, AgentTemplateDefinition, PermissionConfig, SubAgentConfig, TodoConfig } from './template';
-import { Store } from '../infra/store';
+import { Store, MediaCacheRecord } from '../infra/store';
 import { Sandbox, SandboxKind } from '../infra/sandbox';
 import { SandboxFactory } from '../infra/sandbox-factory';
 import { ModelProvider, ModelConfig, AnthropicProvider, OpenAIProvider, GeminiProvider } from '../infra/provider';
@@ -44,7 +46,7 @@ import { BreakpointManager } from './agent/breakpoint-manager';
 import { PermissionManager } from './agent/permission-manager';
 import { TodoRead } from '../tools/todo_read';
 import { TodoWrite } from '../tools/todo_write';
-import { ResumeError } from './errors';
+import { MultimodalValidationError, ResumeError, UnsupportedContentBlockError } from './errors';
 import { MessageQueue, SendOptions as QueueSendOptions } from './agent/message-queue';
 import { TodoManager } from './agent/todo-manager';
 import { ToolRunner } from './agent/tool-runner';
@@ -85,6 +87,9 @@ export interface AgentConfig {
   sandbox?: Sandbox | SandboxConfig;
   tools?: string[];
   exposeThinking?: boolean;
+  retainThinking?: boolean;
+  multimodalContinuation?: 'history';
+  multimodalRetention?: { keepRecent?: number };
   overrides?: {
     permission?: PermissionConfig;
     todo?: TodoConfig;
@@ -103,6 +108,9 @@ interface AgentMetadata {
   modelConfig?: ModelConfig;
   tools: ToolDescriptor[];
   exposeThinking: boolean;
+  retainThinking: boolean;
+  multimodalContinuation?: 'history';
+  multimodalRetention?: { keepRecent?: number };
   permission?: PermissionConfig;
   todo?: TodoConfig;
   subagents?: SubAgentConfig;
@@ -183,10 +191,14 @@ export class Agent {
   private lastSfpIndex = -1;
   private lastBookmark?: Bookmark;
   private exposeThinking: boolean;
+  private retainThinking: boolean;
+  private multimodalContinuation: 'history';
+  private multimodalRetentionKeepRecent: number;
   private permission: PermissionConfig;
   private subagents?: SubAgentConfig;
   private template: AgentTemplateDefinition;
   private lineage: string[] = [];
+  private mediaCache = new Map<string, MediaCacheRecord>();
 
   private get persistentStore(): Store {
     if (!this.deps.store) {
@@ -225,7 +237,19 @@ export class Agent {
     this.sandboxConfig = runtime.sandboxConfig;
     this.permission = runtime.permission;
     this.subagents = runtime.subagents;
+    const templateRuntimeMeta = runtime.template.runtime?.metadata || {};
+    const metadataRetainThinking =
+      typeof (templateRuntimeMeta as any).retainThinking === 'boolean'
+        ? (templateRuntimeMeta as any).retainThinking
+        : undefined;
     this.exposeThinking = config.exposeThinking ?? runtime.template.runtime?.exposeThinking ?? false;
+    this.retainThinking =
+      config.retainThinking ?? metadataRetainThinking ?? runtime.template.runtime?.retainThinking ?? false;
+    this.multimodalContinuation =
+      config.multimodalContinuation ?? runtime.template.runtime?.multimodalContinuation ?? 'history';
+    const keepRecent =
+      config.multimodalRetention?.keepRecent ?? runtime.template.runtime?.multimodalRetention?.keepRecent ?? 3;
+    this.multimodalRetentionKeepRecent = Math.max(0, Math.floor(keepRecent));
     this.toolDescriptors = runtime.toolDescriptors;
     for (const descriptor of this.toolDescriptors) {
       this.toolDescriptorIndex.set(descriptor.name, descriptor);
@@ -263,7 +287,7 @@ export class Agent {
     if (this.template.hooks) {
       this.hooks.register(this.template.hooks, 'agent');
     }
-    if (config.overrides?.hooks) {
+    if (config.overrides?.hooks && config.overrides.hooks !== this.template.hooks) {
       this.hooks.register(config.overrides.hooks, 'agent');
     }
 
@@ -286,7 +310,12 @@ export class Agent {
       watch: this.sandboxConfig?.watchFiles !== false,
       onChange: (event) => this.handleExternalFileChange(event.path, event.mtime),
     });
-    this.contextManager = new ContextManager(this.persistentStore, this.agentId, runtime.context);
+    const contextOptions = { ...(runtime.context || {}) } as ContextManagerOptions;
+    contextOptions.multimodalRetention = {
+      ...(contextOptions.multimodalRetention || {}),
+      keepRecent: this.multimodalRetentionKeepRecent,
+    };
+    this.contextManager = new ContextManager(this.persistentStore, this.agentId, contextOptions);
 
     this.messageQueue = new MessageQueue({
       wrapReminder: this.wrapReminder.bind(this),
@@ -367,6 +396,8 @@ export class Agent {
     this.messages = messages;
     this.lastSfpIndex = this.findLastSfp();
     this.stepCount = messages.filter((m) => m.role === 'user').length;
+    const cachedMedia = await this.persistentStore.loadMediaCache(this.agentId);
+    this.mediaCache = new Map(cachedMedia.map((record) => [record.key, record]));
     const records = await this.persistentStore.loadToolCallRecords(this.agentId);
     this.toolRecords = new Map(records.map((record) => [record.id, this.normalizeToolRecord(record)]));
     if (this.todoService) {
@@ -379,7 +410,10 @@ export class Agent {
     await this.injectSkillsMetadataIntoSystemPrompt();
   }
 
-  async *chatStream(input: string, opts?: StreamOptions): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
+  async *chatStream(
+    input: string | ContentBlock[],
+    opts?: StreamOptions
+  ): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
     const since = opts?.since ?? this.lastBookmark ?? this.events.getLastBookmark();
     await this.send(input);
 
@@ -405,7 +439,7 @@ export class Agent {
     }
   }
 
-  async chat(input: string, opts?: StreamOptions): Promise<CompleteResult> {
+  async chat(input: string | ContentBlock[], opts?: StreamOptions): Promise<CompleteResult> {
     let streamedText = '';
     let bookmark: Bookmark | undefined;
     for await (const envelope of this.chatStream(input, opts)) {
@@ -439,16 +473,24 @@ export class Agent {
     };
   }
 
-  async complete(input: string, opts?: StreamOptions): Promise<CompleteResult> {
+  async complete(input: string | ContentBlock[], opts?: StreamOptions): Promise<CompleteResult> {
     return this.chat(input, opts);
   }
 
-  async *stream(input: string, opts?: StreamOptions): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
+  async *stream(
+    input: string | ContentBlock[],
+    opts?: StreamOptions
+  ): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
     yield* this.chatStream(input, opts);
   }
 
-  async send(text: string, options?: SendOptions): Promise<string> {
-    return this.messageQueue.send(text, options);
+  async send(message: string | ContentBlock[], options?: SendOptions): Promise<string> {
+    if (typeof message === 'string') {
+      return this.messageQueue.send(message, options);
+    }
+    this.validateBlocks(message);
+    const resolved = await this.resolveMultimodalBlocks(message);
+    return this.messageQueue.send(resolved, options);
   }
 
   schedule(): Scheduler {
@@ -612,6 +654,8 @@ export class Agent {
       modelConfig: this.model.toConfig(),
       sandbox: this.sandboxConfig || { kind: 'local', workDir: this.sandbox.workDir },
       exposeThinking: this.exposeThinking,
+      multimodalContinuation: this.multimodalContinuation,
+      multimodalRetention: { keepRecent: this.multimodalRetentionKeepRecent },
       metadata: this.config.metadata,
       overrides: {
         permission: this.subagents.overrides?.permission || this.permission,
@@ -643,6 +687,8 @@ export class Agent {
         : this.model.toConfig(),
       sandbox: this.sandboxConfig || { kind: 'local', workDir: this.sandbox.workDir },
       tools: config.tools,
+      multimodalContinuation: this.multimodalContinuation,
+      multimodalRetention: { keepRecent: this.multimodalRetentionKeepRecent },
       metadata: {
         ...this.config.metadata,
         parentAgentId: this.agentId,
@@ -719,7 +765,15 @@ export class Agent {
     };
 
     const agent = new Agent(
-      { ...config, agentId, templateId: templateId, exposeThinking: metadata.exposeThinking },
+      {
+        ...config,
+        agentId,
+        templateId: templateId,
+        exposeThinking: metadata.exposeThinking,
+        retainThinking: metadata.retainThinking,
+        multimodalContinuation: metadata.multimodalContinuation,
+        multimodalRetention: metadata.multimodalRetention,
+      },
       deps,
       {
         template,
@@ -801,6 +855,7 @@ export class Agent {
       modelConfig: metadata.modelConfig,
       sandbox: metadata.sandboxConfig,
       exposeThinking: metadata.exposeThinking,
+      retainThinking: metadata.retainThinking,
       context: metadata.context,
       metadata: metadata.metadata,
       overrides: {
@@ -911,6 +966,7 @@ export class Agent {
       await this.hooks.runPreModel(this.messages);
 
       this.setBreakpoint('STREAMING_MODEL');
+      let assistantBlocks: ContentBlock[] = [];
       const stream = this.model.stream(this.messages, {
         tools: this.getToolSchemas(),
         maxTokens: this.config.metadata?.maxTokens,
@@ -918,21 +974,32 @@ export class Agent {
         system: this.template.systemPrompt,
       });
 
-      const assistantBlocks: ContentBlock[] = [];
       let currentBlockIndex = -1;
       let currentToolBuffer = '';
       const textBuffers = new Map<number, string>();
-
-      if (this.exposeThinking) {
-        this.events.emitProgress({ channel: 'progress', type: 'think_chunk_start', step: this.stepCount });
-      }
+      const reasoningBuffers = new Map<number, string>();
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_start') {
           if (chunk.content_block?.type === 'text') {
             currentBlockIndex = chunk.index ?? 0;
+            textBuffers.set(currentBlockIndex, '');
             assistantBlocks[currentBlockIndex] = { type: 'text', text: '' };
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk_start', step: this.stepCount });
+          } else if (chunk.content_block?.type === 'reasoning') {
+            currentBlockIndex = chunk.index ?? 0;
+            reasoningBuffers.set(currentBlockIndex, '');
+            assistantBlocks[currentBlockIndex] = { type: 'reasoning', reasoning: '' };
+            if (this.exposeThinking) {
+              this.events.emitProgress({ channel: 'progress', type: 'think_chunk_start', step: this.stepCount });
+            }
+          } else if (
+            chunk.content_block?.type === 'image' ||
+            chunk.content_block?.type === 'audio' ||
+            chunk.content_block?.type === 'file'
+          ) {
+            currentBlockIndex = chunk.index ?? 0;
+            assistantBlocks[currentBlockIndex] = chunk.content_block as ContentBlock;
           } else if (chunk.content_block?.type === 'tool_use') {
             currentBlockIndex = chunk.index ?? 0;
             currentToolBuffer = '';
@@ -954,6 +1021,16 @@ export class Agent {
               (assistantBlocks[currentBlockIndex] as any).text = existing + text;
             }
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk', step: this.stepCount, delta: text });
+          } else if (chunk.delta?.type === 'reasoning_delta') {
+            const text = chunk.delta.text ?? '';
+            const existing = reasoningBuffers.get(currentBlockIndex) ?? '';
+            reasoningBuffers.set(currentBlockIndex, existing + text);
+            if (assistantBlocks[currentBlockIndex]?.type === 'reasoning') {
+              (assistantBlocks[currentBlockIndex] as any).reasoning = existing + text;
+            }
+            if (this.exposeThinking) {
+              this.events.emitProgress({ channel: 'progress', type: 'think_chunk', step: this.stepCount, delta: text });
+            }
           } else if (chunk.delta?.type === 'input_json_delta') {
             currentToolBuffer += chunk.delta.partial_json ?? '';
             try {
@@ -981,19 +1058,27 @@ export class Agent {
           if (assistantBlocks[currentBlockIndex]?.type === 'text') {
             const fullText = textBuffers.get(currentBlockIndex) ?? '';
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk_end', step: this.stepCount, text: fullText });
+          } else if (assistantBlocks[currentBlockIndex]?.type === 'reasoning') {
+            if (this.exposeThinking) {
+              this.events.emitProgress({ channel: 'progress', type: 'think_chunk_end', step: this.stepCount });
+            }
           }
           currentBlockIndex = -1;
           currentToolBuffer = '';
         }
       }
 
-      if (this.exposeThinking) {
-        this.events.emitProgress({ channel: 'progress', type: 'think_chunk_end', step: this.stepCount });
-      }
+      assistantBlocks = this.splitThinkBlocksIfNeeded(assistantBlocks);
 
       await this.hooks.runPostModel({ role: 'assistant', content: assistantBlocks } as any);
 
-      this.messages.push({ role: 'assistant', content: assistantBlocks });
+      const originalBlocks = assistantBlocks;
+      const storedBlocks = this.retainThinking
+        ? originalBlocks
+        : originalBlocks.filter((block) => block.type !== 'reasoning');
+      const metadata = this.buildMessageMetadata(originalBlocks, storedBlocks, this.retainThinking ? 'provider' : 'omit');
+
+      this.messages.push({ role: 'assistant', content: storedBlocks, metadata });
       await this.persistMessages();
 
       const toolBlocks = assistantBlocks.filter((block) => block.type === 'tool_use');
@@ -1431,6 +1516,238 @@ export class Agent {
     return text.length > limit ? `${text.slice(0, limit)}…` : text;
   }
 
+  private validateBlocks(blocks: ContentBlock[]): void {
+    const config = this.model.toConfig();
+    const multimodal = config.multimodal || {};
+    const mode = multimodal.mode ?? 'url';
+    const maxBase64Bytes = multimodal.maxBase64Bytes ?? 20000000;
+    const allowMimeTypes = multimodal.allowMimeTypes ?? [
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'image/webp',
+      'application/pdf',
+    ];
+
+    for (const block of blocks) {
+      if (block.type === 'image' || block.type === 'audio' || block.type === 'file') {
+        const url = (block as any).url as string | undefined;
+        const fileId = (block as any).file_id as string | undefined;
+        const base64 = (block as any).base64 as string | undefined;
+        const mimeType = (block as any).mime_type as string | undefined;
+
+        if (!url && !fileId && !base64) {
+          throw new MultimodalValidationError(`Missing url/file_id/base64 for ${block.type} block.`);
+        }
+
+        if (base64) {
+          if (mode !== 'url+base64') {
+            throw new MultimodalValidationError(`Base64 is not allowed when multimodal.mode=${mode}.`);
+          }
+          if (!mimeType) {
+            throw new MultimodalValidationError(`mime_type is required for base64 ${block.type} blocks.`);
+          }
+          const bytes = this.estimateBase64Bytes(base64);
+          if (bytes > maxBase64Bytes) {
+            throw new MultimodalValidationError(
+              `base64 payload too large (${bytes} bytes > ${maxBase64Bytes} bytes).`
+            );
+          }
+        }
+
+        if (mimeType && !allowMimeTypes.includes(mimeType)) {
+          throw new MultimodalValidationError(`mime_type not allowed: ${mimeType}`);
+        }
+
+        if (url) {
+          const allowedSchemes = block.type === 'file' ? ['http', 'https', 'gs'] : ['http', 'https'];
+          const scheme = url.split(':')[0];
+          if (!allowedSchemes.includes(scheme)) {
+            throw new MultimodalValidationError(`Unsupported url scheme for ${block.type}: ${scheme}`);
+          }
+        }
+      } else if (
+        block.type !== 'text' &&
+        block.type !== 'tool_use' &&
+        block.type !== 'tool_result' &&
+        block.type !== 'reasoning'
+      ) {
+        throw new UnsupportedContentBlockError(`Unsupported content block type: ${(block as any).type}`);
+      }
+    }
+  }
+
+  private estimateBase64Bytes(payload: string): number {
+    const normalized = payload.replace(/\s+/g, '');
+    const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0;
+    return Math.floor((normalized.length * 3) / 4) - padding;
+  }
+
+  private async resolveMultimodalBlocks(blocks: ContentBlock[]): Promise<ContentBlock[]> {
+    const model = this.model as any;
+    if (typeof model.uploadFile !== 'function') {
+      return blocks;
+    }
+
+    const provider = this.model.toConfig().provider;
+    const resolved: ContentBlock[] = [];
+
+    for (const block of blocks) {
+      if (
+        (block.type === 'image' || block.type === 'file') &&
+        block.base64 &&
+        block.mime_type &&
+        !block.file_id &&
+        !block.url
+      ) {
+        try {
+          const buffer = Buffer.from(block.base64, 'base64');
+          const hash = this.computeSha256(buffer);
+          const cached = this.mediaCache.get(hash);
+          if (cached && cached.provider === provider && (cached.fileId || cached.fileUri)) {
+            resolved.push(this.applyMediaCache(block, cached));
+            continue;
+          }
+
+          const uploadResult = await model.uploadFile({
+            data: buffer,
+            mimeType: block.mime_type,
+            filename: (block as any).filename,
+            kind: block.type,
+          });
+
+          if (uploadResult?.fileId || uploadResult?.fileUri) {
+            const record: MediaCacheRecord = {
+              key: hash,
+              provider,
+              mimeType: block.mime_type,
+              sizeBytes: buffer.length,
+              fileId: uploadResult.fileId,
+              fileUri: uploadResult.fileUri,
+              createdAt: Date.now(),
+            };
+            this.mediaCache.set(hash, record);
+            await this.persistMediaCache();
+            resolved.push(this.applyMediaCache(block, record));
+            continue;
+          }
+        } catch (error: any) {
+          this.events.emitMonitor({
+            channel: 'monitor',
+            type: 'error',
+            severity: 'warn',
+            phase: 'system',
+            message: 'media upload failed',
+            detail: { error: error?.message || String(error) },
+          });
+        }
+      }
+      resolved.push(block);
+    }
+
+    return resolved;
+  }
+
+  private applyMediaCache(block: ContentBlock, record: MediaCacheRecord): ContentBlock {
+    if (block.type !== 'file' && block.type !== 'image') {
+      return block;
+    }
+    const next: any = { ...block };
+    if (record.fileId) {
+      next.file_id = record.fileId;
+    } else if (record.fileUri) {
+      next.file_id = record.fileUri;
+    }
+    next.base64 = undefined;
+    return next;
+  }
+
+  private computeSha256(buffer: Buffer): string {
+    return createHash('sha256').update(buffer).digest('hex');
+  }
+
+  private async persistMediaCache(): Promise<void> {
+    await this.persistentStore.saveMediaCache(this.agentId, Array.from(this.mediaCache.values()));
+  }
+
+  private splitThinkBlocksIfNeeded(blocks: ContentBlock[]): ContentBlock[] {
+    const config = this.model.toConfig();
+    const transport =
+      config.reasoningTransport ??
+      (config.provider === 'openai' || config.provider === 'gemini' ? 'text' : 'provider');
+    if (transport !== 'text') {
+      return blocks;
+    }
+
+    const output: ContentBlock[] = [];
+    for (const block of blocks) {
+      if (block.type !== 'text') {
+        output.push(block);
+        continue;
+      }
+      const parts = this.splitThinkText(block.text);
+      if (parts.length === 0) {
+        output.push(block);
+      } else {
+        output.push(...parts);
+      }
+    }
+    return output;
+  }
+
+  private splitThinkText(text: string): ContentBlock[] {
+    const blocks: ContentBlock[] = [];
+    const regex = /<think>([\s\S]*?)<\/think>/g;
+    let match: RegExpExecArray | null;
+    let cursor = 0;
+    let matched = false;
+
+    while ((match = regex.exec(text)) !== null) {
+      matched = true;
+      const before = text.slice(cursor, match.index);
+      if (before) {
+        blocks.push({ type: 'text', text: before });
+      }
+      const reasoning = match[1] || '';
+      blocks.push({ type: 'reasoning', reasoning });
+      cursor = match.index + match[0].length;
+    }
+
+    if (!matched) {
+      return [];
+    }
+
+    const after = text.slice(cursor);
+    if (after) {
+      blocks.push({ type: 'text', text: after });
+    }
+    return blocks;
+  }
+
+  private shouldPreserveBlocks(blocks: ContentBlock[]): boolean {
+    const hasReasoning = blocks.some((block) => block.type === 'reasoning');
+    const hasTools = blocks.some((block) => block.type === 'tool_use' || block.type === 'tool_result');
+    const hasMultimodal = blocks.some(
+      (block) => block.type === 'image' || block.type === 'audio' || block.type === 'file'
+    );
+    const hasMixed = blocks.length > 1 && (hasReasoning || hasMultimodal);
+    return hasMixed || (hasReasoning && hasTools);
+  }
+
+  private buildMessageMetadata(
+    original: ContentBlock[],
+    stored: ContentBlock[],
+    transport: MessageMetadata['transport']
+  ): MessageMetadata | undefined {
+    if (!this.shouldPreserveBlocks(original) && original.length === stored.length) {
+      return undefined;
+    }
+    return {
+      content_blocks: original,
+      transport,
+    };
+  }
+
   private async requestPermission(id: string, _toolName: string, _args: any, meta?: any): Promise<'allow' | 'deny'> {
     const approval: ToolCallApproval = {
       required: true,
@@ -1694,6 +2011,7 @@ export class Agent {
       messages: this.messages.map((message) => ({
         role: message.role,
         content: message.content.map((block) => ({ ...block })),
+        metadata: message.metadata ? { ...message.metadata } : undefined,
       })),
       lastBookmark: this.lastBookmark,
     };
@@ -1713,6 +2031,9 @@ export class Agent {
       modelConfig: this.model.toConfig(),
       tools: this.toolDescriptors,
       exposeThinking: this.exposeThinking,
+      retainThinking: this.retainThinking,
+      multimodalContinuation: this.multimodalContinuation,
+      multimodalRetention: { keepRecent: this.multimodalRetentionKeepRecent },
       permission: this.permission,
       todo: this.todoConfig,
       subagents: this.subagents,
@@ -1959,6 +2280,9 @@ export class Agent {
   }
 
   private enqueueMessage(message: Message, kind: 'user' | 'reminder'): void {
+    if (!message.metadata && this.shouldPreserveBlocks(message.content)) {
+      message.metadata = this.buildMessageMetadata(message.content, message.content, 'provider');
+    }
     this.messages.push(message);
     if (kind === 'user') {
       this.lastSfpIndex = this.messages.length - 1;
@@ -1994,19 +2318,54 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
       if (!config.apiKey) {
         throw new Error('Anthropic provider requires apiKey');
       }
-      return new AnthropicProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl);
+      return new AnthropicProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
+        reasoningTransport: config.reasoningTransport,
+        extraHeaders: config.extraHeaders,
+        extraBody: config.extraBody,
+        providerOptions: config.providerOptions,
+        multimodal: config.multimodal,
+      });
     }
     if (config.provider === 'openai') {
       if (!config.apiKey) {
         throw new Error('OpenAI provider requires apiKey');
       }
-      return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl);
+      return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
+        providerName: 'openai',
+        reasoningTransport: config.reasoningTransport,
+        extraHeaders: config.extraHeaders,
+        extraBody: config.extraBody,
+        providerOptions: config.providerOptions,
+        multimodal: config.multimodal,
+      });
     }
     if (config.provider === 'gemini') {
       if (!config.apiKey) {
         throw new Error('Gemini provider requires apiKey');
       }
-      return new GeminiProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl);
+      return new GeminiProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
+        reasoningTransport: config.reasoningTransport,
+        extraHeaders: config.extraHeaders,
+        extraBody: config.extraBody,
+        providerOptions: config.providerOptions,
+        multimodal: config.multimodal,
+      });
+    }
+    if (config.provider === 'glm' || config.provider === 'minimax') {
+      if (!config.apiKey) {
+        throw new Error(`${config.provider} provider requires apiKey`);
+      }
+      if (!config.baseUrl) {
+        throw new Error(`${config.provider} provider requires baseUrl`);
+      }
+      return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
+        providerName: config.provider,
+        reasoningTransport: config.reasoningTransport,
+        extraHeaders: config.extraHeaders,
+        extraBody: config.extraBody,
+        providerOptions: config.providerOptions,
+        multimodal: config.multimodal,
+      });
     }
     throw new Error(`Model factory not provided for provider: ${config.provider}`);
   };

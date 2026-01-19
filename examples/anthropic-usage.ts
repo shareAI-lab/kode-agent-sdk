@@ -10,8 +10,8 @@ import {
   Agent,
   AgentDependencies,
   AgentTemplateRegistry,
+  AnthropicProvider,
   ContentBlock,
-  GeminiProvider,
   JSONStore,
   ModelConfig,
   ModelProvider,
@@ -27,17 +27,17 @@ const allowedModes: Mode[] = ['modelConfig', 'provider', 'factory'];
 
 if (!allowedModes.includes(mode)) {
   console.error(`Unknown mode: ${mode}`);
-  console.error('Usage: ts-node examples/gemini-usage.ts [modelConfig|provider|factory]');
+  console.error('Usage: ts-node examples/anthropic-usage.ts [modelConfig|provider|factory]');
   process.exit(1);
 }
 
-const apiKey = process.env.GEMINI_API_KEY;
-const modelId = process.env.GEMINI_MODEL_ID ?? 'gemini-3.0-flash';
-const baseUrl = process.env.GEMINI_BASE_URL;
+const apiKey = process.env.ANTHROPIC_API_KEY;
+const modelId = process.env.ANTHROPIC_MODEL_ID ?? 'claude-3-5-sonnet-20241022';
+const baseUrl = process.env.ANTHROPIC_BASE_URL;
 
 function requireApiKey(value?: string): string {
   if (value) return value;
-  throw new Error('GEMINI_API_KEY is required for this mode.');
+  throw new Error('ANTHROPIC_API_KEY is required for this mode.');
 }
 
 const sandboxConfig = { kind: 'local', workDir: '.', enforceBoundary: true, watchFiles: false } as const;
@@ -96,6 +96,51 @@ async function streamConversation(
   return { wroteText, errorMessage, text: collectedText };
 }
 
+function normalizeAnthropicBaseUrl(value?: string): string {
+  const fallback = 'https://api.anthropic.com';
+  if (!value) return fallback;
+  const trimmed = value.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
+}
+
+async function uploadAnthropicFile(
+  key: string,
+  url: string | undefined,
+  file: { data: Buffer; filename: string; mimeType: string }
+): Promise<string> {
+  const endpoint = `${normalizeAnthropicBaseUrl(url)}/v1/files`;
+  const FormDataCtor = (globalThis as any).FormData;
+  const BlobCtor = (globalThis as any).Blob;
+  if (!FormDataCtor || !BlobCtor) {
+    throw new Error('FormData/Blob is not available in this runtime.');
+  }
+  const form = new FormDataCtor();
+  form.append('file', new BlobCtor([file.data], { type: file.mimeType }), file.filename);
+  form.append('purpose', 'document');
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'files-api-2025-04-14',
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Anthropic files API error: ${response.status} ${error}`);
+  }
+
+  const data: any = await response.json();
+  const fileId = data?.id ?? data?.file_id;
+  if (!fileId) {
+    throw new Error('Anthropic files API did not return a file id.');
+  }
+  return fileId;
+}
+
 function createDependencies(modelFactory?: (config: ModelConfig) => ModelProvider): AgentDependencies {
   const store = new JSONStore('./.kode');
   const templates = new AgentTemplateRegistry();
@@ -103,7 +148,7 @@ function createDependencies(modelFactory?: (config: ModelConfig) => ModelProvide
   const sandboxFactory = new SandboxFactory();
 
   templates.register({
-    id: 'gemini-demo',
+    id: 'anthropic-demo',
     systemPrompt: 'You are a helpful engineer. Use fs_read to read files before answering file-based requests.',
     tools: ['fs_read', 'todo_read', 'todo_write'],
     runtime: { todo: { enabled: true, reminderOnStart: true } },
@@ -133,20 +178,20 @@ function createDependencies(modelFactory?: (config: ModelConfig) => ModelProvide
 async function createAgent(modeSelected: Mode): Promise<Agent> {
   if (modeSelected === 'factory') {
     const deps = createDependencies((config) => {
-      const key = config.apiKey ?? process.env.GEMINI_API_KEY;
+      const key = config.apiKey ?? process.env.ANTHROPIC_API_KEY;
       if (!key) {
-        throw new Error('GEMINI_API_KEY is required for factory mode.');
+        throw new Error('ANTHROPIC_API_KEY is required for factory mode.');
       }
-      const model = config.model ?? process.env.GEMINI_MODEL_ID ?? 'gemini-3.0-flash';
-      const url = config.baseUrl ?? process.env.GEMINI_BASE_URL;
-      return new GeminiProvider(key, model, url, undefined, { multimodal: multimodalConfig });
+      const model = config.model ?? process.env.ANTHROPIC_MODEL_ID ?? 'claude-3-5-sonnet-20241022';
+      const url = config.baseUrl ?? process.env.ANTHROPIC_BASE_URL;
+      return new AnthropicProvider(key, model, url, undefined, { multimodal: multimodalConfig });
     });
 
     return Agent.create(
       {
-        templateId: 'gemini-demo',
+        templateId: 'anthropic-demo',
         modelConfig: {
-          provider: 'gemini',
+          provider: 'anthropic',
           model: modelId,
           baseUrl,
           multimodal: multimodalConfig,
@@ -162,8 +207,8 @@ async function createAgent(modeSelected: Mode): Promise<Agent> {
   if (modeSelected === 'provider') {
     return Agent.create(
       {
-        templateId: 'gemini-demo',
-        model: new GeminiProvider(requireApiKey(apiKey), modelId, baseUrl, undefined, { multimodal: multimodalConfig }),
+        templateId: 'anthropic-demo',
+        model: new AnthropicProvider(requireApiKey(apiKey), modelId, baseUrl, undefined, { multimodal: multimodalConfig }),
         sandbox: sandboxConfig,
       },
       deps
@@ -172,9 +217,9 @@ async function createAgent(modeSelected: Mode): Promise<Agent> {
 
   return Agent.create(
     {
-      templateId: 'gemini-demo',
+      templateId: 'anthropic-demo',
       modelConfig: {
-        provider: 'gemini',
+        provider: 'anthropic',
         apiKey: requireApiKey(apiKey),
         model: modelId,
         baseUrl,
@@ -187,7 +232,7 @@ async function createAgent(modeSelected: Mode): Promise<Agent> {
 }
 
 async function main() {
-  console.log(`Gemini example mode: ${mode}`);
+  console.log(`Anthropic example mode: ${mode}`);
   const agent = await createAgent(mode);
   const renderer = new MarkdownStreamRenderer(process.stdout);
   const tracker = createErrorTracker(agent);
@@ -216,21 +261,20 @@ async function main() {
           (file.kind === 'pdf'
             ? 'Summarize the PDF in 3 bullet points.'
             : 'Describe the image in one sentence.');
-        const blocks: ContentBlock[] = [
-          { type: 'text', text: prompt },
-          file.kind === 'pdf'
-            ? {
-                type: 'file',
-                base64: file.data.toString('base64'),
-                mime_type: file.mimeType,
-                filename: file.filename,
-              }
-            : {
-                type: 'image',
-                base64: file.data.toString('base64'),
-                mime_type: file.mimeType,
-              },
-        ];
+        const blocks: ContentBlock[] = [{ type: 'text', text: prompt }];
+
+        if (file.kind === 'image') {
+          blocks.push({
+            type: 'image',
+            base64: file.data.toString('base64'),
+            mime_type: file.mimeType,
+          });
+        } else {
+          const fileId = process.env.ANTHROPIC_FILE_ID
+            ? process.env.ANTHROPIC_FILE_ID
+            : await uploadAnthropicFile(requireApiKey(apiKey), baseUrl, file);
+          blocks.push({ type: 'file', file_id: fileId, mime_type: file.mimeType });
+        }
 
         const fileTracker = createErrorTracker(agent);
         let errorMessage: string | null = null;

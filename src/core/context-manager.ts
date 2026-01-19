@@ -22,6 +22,7 @@ export interface ContextManagerOptions {
   compressToTokens?: number;
   compressionModel?: string;
   compressionPrompt?: string;
+  multimodalRetention?: { keepRecent?: number };
 }
 
 export interface FilePoolState {
@@ -42,6 +43,7 @@ export class ContextManager {
   private readonly compressToTokens: number;
   private readonly compressionModel: string;
   private readonly compressionPrompt: string;
+  private readonly keepRecentMultimodal: number;
 
   constructor(
     private readonly store: Store,
@@ -52,6 +54,8 @@ export class ContextManager {
     this.compressToTokens = opts?.compressToTokens ?? 30_000;
     this.compressionModel = opts?.compressionModel ?? 'claude-haiku-4-5';
     this.compressionPrompt = opts?.compressionPrompt ?? 'Summarize the conversation history concisely';
+    const keepRecent = opts?.multimodalRetention?.keepRecent ?? 3;
+    this.keepRecentMultimodal = Math.max(0, Math.floor(keepRecent));
   }
 
   /**
@@ -59,10 +63,17 @@ export class ContextManager {
    */
   analyze(messages: Message[]): ContextUsage {
     const totalTokens = messages.reduce((sum, message) => {
+      const blocks = message.metadata?.transport === 'omit'
+        ? message.content
+        : message.metadata?.content_blocks ?? message.content;
       return (
         sum +
-        message.content.reduce((inner, block) => {
+        blocks.reduce((inner, block) => {
           if (block.type === 'text') return inner + Math.ceil(block.text.length / 4); // 粗略估算：4 chars = 1 token
+          if (block.type === 'reasoning') return inner + Math.ceil(block.reasoning.length / 4);
+          if (block.type === 'image' || block.type === 'audio' || block.type === 'file') {
+            return inner + 500; // 固定估算，避免 base64 膨胀
+          }
           return inner + Math.ceil(JSON.stringify(block).length / 4);
         }, 0)
       );
@@ -114,7 +125,13 @@ export class ContextManager {
 
     // 2. 执行压缩（简化版：保留 60% 消息）
     const targetRatio = this.compressToTokens / usage.totalTokens;
-    const keepCount = Math.ceil(messages.length * Math.max(targetRatio, 0.6));
+    let keepCount = Math.ceil(messages.length * Math.max(targetRatio, 0.6));
+    const keepFromIndex = messages.length - keepCount;
+
+    const multimodalKeepFrom = this.findKeepFromIndexForMultimodal(messages, this.keepRecentMultimodal);
+    const finalKeepFrom = Math.min(keepFromIndex, multimodalKeepFrom);
+    keepCount = messages.length - finalKeepFrom;
+
     const retainedMessages = messages.slice(-keepCount);
     const removedMessages = messages.slice(0, messages.length - keepCount);
 
@@ -192,13 +209,32 @@ export class ContextManager {
     return messages
       .map((msg, idx) => {
         const header = `${idx + 1}. [${msg.role}]`;
-        const content = msg.content
+        const blocks = msg.metadata?.transport === 'omit'
+          ? msg.content
+          : msg.metadata?.content_blocks ?? msg.content;
+        const content = blocks
           .map((block) => {
             if (block.type === 'text') return block.text.slice(0, 200);
-            if (block.type === 'tool_use') return `🔧 ${block.name}(...)`;
+            if (block.type === 'reasoning') return `[reasoning] ${block.reasoning.slice(0, 200)}`;
+            if (block.type === 'image') {
+              const source = block.base64 ? 'base64' : block.url ? 'url' : block.file_id ? 'file_id' : 'unknown';
+              const id = block.file_id || block.url || 'base64';
+              return `[image-summary id=${id} mime=${block.mime_type || 'unknown'} note="source=${source}"]`;
+            }
+            if (block.type === 'audio') {
+              const source = block.base64 ? 'base64' : block.url ? 'url' : block.file_id ? 'file_id' : 'unknown';
+              const id = block.file_id || block.url || 'base64';
+              return `[audio-summary id=${id} mime=${block.mime_type || 'unknown'} note="source=${source}"]`;
+            }
+            if (block.type === 'file') {
+              const source = block.base64 ? 'base64' : block.url ? 'url' : block.file_id ? 'file_id' : 'unknown';
+              const id = block.file_id || block.url || block.filename || 'base64';
+              return `[file-summary id=${id} mime=${block.mime_type || 'unknown'} note="source=${source}"]`;
+            }
+            if (block.type === 'tool_use') return `[tool] ${block.name}(...)`;
             if (block.type === 'tool_result') {
               const preview = JSON.stringify(block.content).slice(0, 100);
-              return `✅ result: ${preview}`;
+              return `[result] ${preview}`;
             }
             return '';
           })
@@ -206,6 +242,31 @@ export class ContextManager {
         return `${header}\n${content}`;
       })
       .join('\n\n');
+  }
+
+  private findKeepFromIndexForMultimodal(messages: Message[], keepRecent: number): number {
+    if (keepRecent <= 0) return messages.length;
+    let remaining = keepRecent;
+    let earliestIndex = messages.length;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      const blocks = msg.metadata?.transport === 'omit'
+        ? msg.content
+        : msg.metadata?.content_blocks ?? msg.content;
+      for (const block of blocks) {
+        if (block.type === 'image' || block.type === 'audio' || block.type === 'file') {
+          remaining -= 1;
+          earliestIndex = i;
+          if (remaining <= 0) {
+            return i;
+          }
+        }
+      }
+    }
+    if (earliestIndex === messages.length) {
+      return messages.length;
+    }
+    return earliestIndex;
   }
 
   /**

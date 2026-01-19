@@ -6,11 +6,55 @@ export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } }
   | { type: 'tool_use'; id: string; name: string; input: any; meta?: Record<string, any> }
-  | { type: 'tool_result'; tool_use_id: string; content: any; is_error?: boolean };
+  | { type: 'tool_result'; tool_use_id: string; content: any; is_error?: boolean }
+  | ReasoningContentBlock
+  | ImageContentBlock
+  | AudioContentBlock
+  | FileContentBlock;
+
+export type ReasoningContentBlock = {
+  type: 'reasoning';
+  reasoning: string;
+  meta?: Record<string, any>;
+};
+
+export type ImageContentBlock = {
+  type: 'image';
+  url?: string;
+  file_id?: string;
+  base64?: string;
+  mime_type?: string;
+  meta?: Record<string, any>;
+};
+
+export type AudioContentBlock = {
+  type: 'audio';
+  url?: string;
+  file_id?: string;
+  base64?: string;
+  mime_type?: string;
+  meta?: Record<string, any>;
+};
+
+export type FileContentBlock = {
+  type: 'file';
+  url?: string;
+  file_id?: string;
+  filename?: string;
+  base64?: string;
+  mime_type?: string;
+  meta?: Record<string, any>;
+};
 
 export interface Message {
   role: MessageRole;
   content: ContentBlock[];
+  metadata?: MessageMetadata;
+}
+
+export interface MessageMetadata {
+  content_blocks?: ContentBlock[];
+  transport?: 'provider' | 'text' | 'omit';
 }
 
 export interface Bookmark {

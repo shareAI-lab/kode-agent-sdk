@@ -1,4 +1,4 @@
-import { Message, ContentBlock } from '../core/types';
+import { Message, ContentBlock, ImageContentBlock, FileContentBlock } from '../core/types';
 import { Configurable } from '../core/config';
 
 export interface ModelResponse {
@@ -16,7 +16,7 @@ export interface ModelStreamChunk {
   index?: number;
   content_block?: ContentBlock;
   delta?: {
-    type: 'text_delta' | 'input_json_delta';
+    type: 'text_delta' | 'input_json_delta' | 'reasoning_delta';
     text?: string;
     partial_json?: string;
   };
@@ -24,6 +24,18 @@ export interface ModelStreamChunk {
     input_tokens?: number;
     output_tokens: number;
   };
+}
+
+export interface UploadFileInput {
+  data: Buffer;
+  mimeType: string;
+  filename?: string;
+  kind: 'image' | 'file';
+}
+
+export interface UploadFileResult {
+  fileId?: string;
+  fileUri?: string;
 }
 
 export interface ModelConfig {
@@ -34,6 +46,15 @@ export interface ModelConfig {
   proxyUrl?: string;
   maxTokens?: number;
   temperature?: number;
+  reasoningTransport?: 'omit' | 'text' | 'provider';
+  extraHeaders?: Record<string, string>;
+  extraBody?: Record<string, any>;
+  providerOptions?: Record<string, any>;
+  multimodal?: {
+    mode?: 'url' | 'url+base64';
+    maxBase64Bytes?: number;
+    allowMimeTypes?: string[];
+  };
 }
 
 export interface ModelProvider extends Configurable<ModelConfig> {
@@ -63,6 +84,8 @@ export interface ModelProvider extends Configurable<ModelConfig> {
     }
   ): AsyncIterable<ModelStreamChunk>;
 
+  uploadFile?(input: UploadFileInput): Promise<UploadFileResult | null>;
+
 }
 
 export class AnthropicProvider implements ModelProvider {
@@ -71,16 +94,33 @@ export class AnthropicProvider implements ModelProvider {
   readonly temperature = 0.7;
   readonly model: string;
   private readonly dispatcher?: any;
+  private readonly reasoningTransport?: ModelConfig['reasoningTransport'];
+  private readonly extraHeaders?: Record<string, string>;
+  private readonly extraBody?: Record<string, any>;
+  private readonly providerOptions?: Record<string, any>;
+  private readonly multimodal?: ModelConfig['multimodal'];
 
   constructor(
     private apiKey: string,
     model: string = 'claude-3-5-sonnet-20241022',
     private baseUrl: string = 'https://api.anthropic.com',
-    proxyUrl?: string
+    proxyUrl?: string,
+    options?: {
+      reasoningTransport?: ModelConfig['reasoningTransport'];
+      extraHeaders?: Record<string, string>;
+      extraBody?: Record<string, any>;
+      providerOptions?: Record<string, any>;
+      multimodal?: ModelConfig['multimodal'];
+    }
   ) {
     this.model = model;
     this.baseUrl = normalizeAnthropicBaseUrl(baseUrl);
     this.dispatcher = getProxyDispatcher(proxyUrl);
+    this.reasoningTransport = options?.reasoningTransport ?? 'provider';
+    this.extraHeaders = options?.extraHeaders;
+    this.extraBody = options?.extraBody;
+    this.providerOptions = options?.providerOptions;
+    this.multimodal = options?.multimodal;
   }
 
   async complete(
@@ -94,6 +134,7 @@ export class AnthropicProvider implements ModelProvider {
     }
   ): Promise<ModelResponse> {
     const body: any = {
+      ...(this.extraBody || {}),
       model: this.model,
       messages: this.formatMessages(messages),
       max_tokens: opts?.maxTokens || 4096,
@@ -102,17 +143,34 @@ export class AnthropicProvider implements ModelProvider {
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
+    if (this.reasoningTransport === 'provider' && !body.thinking) {
+      body.thinking = { type: 'enabled' };
+    }
+
+    const betaEntries: string[] = [];
+    if (this.reasoningTransport === 'provider') {
+      betaEntries.push('interleaved-thinking-2025-05-14');
+    }
+    if (hasAnthropicFileBlocks(messages)) {
+      betaEntries.push('files-api-2025-04-14');
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-api-key': this.apiKey,
+      'anthropic-version': '2023-06-01',
+      ...(this.extraHeaders || {}),
+    };
+    const mergedBeta = mergeAnthropicBetaHeader(headers['anthropic-beta'], betaEntries);
+    if (mergedBeta) {
+      headers['anthropic-beta'] = mergedBeta;
+    }
 
     const response = await fetch(
       `${this.baseUrl}/v1/messages`,
       withProxy(
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': this.apiKey,
-            'anthropic-version': '2023-06-01',
-          },
+          headers,
           body: JSON.stringify(body),
         },
         this.dispatcher
@@ -125,9 +183,10 @@ export class AnthropicProvider implements ModelProvider {
     }
 
     const data: any = await response.json();
+    const content = normalizeAnthropicContent(data.content, this.reasoningTransport);
     return {
       role: 'assistant',
-      content: data.content,
+      content,
       usage: data.usage,
       stop_reason: data.stop_reason,
     };
@@ -147,22 +206,40 @@ export class AnthropicProvider implements ModelProvider {
       messages: this.formatMessages(messages),
       max_tokens: opts?.maxTokens || 4096,
       stream: true,
+      ...(this.extraBody || {}),
     };
 
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
     if (opts?.system) body.system = opts.system;
     if (opts?.tools && opts.tools.length > 0) body.tools = opts.tools;
+    if (this.reasoningTransport === 'provider' && !body.thinking) {
+      body.thinking = { type: 'enabled' };
+    }
+
+    const betaEntries: string[] = [];
+    if (this.reasoningTransport === 'provider') {
+      betaEntries.push('interleaved-thinking-2025-05-14');
+    }
+    if (hasAnthropicFileBlocks(messages)) {
+      betaEntries.push('files-api-2025-04-14');
+    }
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-api-key': this.apiKey,
+      'anthropic-version': '2023-06-01',
+      ...(this.extraHeaders || {}),
+    };
+    const mergedBeta = mergeAnthropicBetaHeader(headers['anthropic-beta'], betaEntries);
+    if (mergedBeta) {
+      headers['anthropic-beta'] = mergedBeta;
+    }
 
     const response = await fetch(
       `${this.baseUrl}/v1/messages`,
       withProxy(
         {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': this.apiKey,
-            'anthropic-version': '2023-06-01',
-          },
+          headers,
           body: JSON.stringify(body),
         },
         this.dispatcher
@@ -196,9 +273,14 @@ export class AnthropicProvider implements ModelProvider {
         try {
           const event = JSON.parse(data);
           if (event.type === 'content_block_start') {
-            yield { type: 'content_block_start', index: event.index, content_block: event.content_block };
+            const block = normalizeAnthropicContentBlock(event.content_block, this.reasoningTransport);
+            if (!block) {
+              continue;
+            }
+            yield { type: 'content_block_start', index: event.index, content_block: block };
           } else if (event.type === 'content_block_delta') {
-            yield { type: 'content_block_delta', index: event.index, delta: event.delta };
+            const delta = normalizeAnthropicDelta(event.delta);
+            yield { type: 'content_block_delta', index: event.index, delta };
           } else if (event.type === 'content_block_stop') {
             yield { type: 'content_block_stop', index: event.index };
           } else if (event.type === 'message_delta') {
@@ -214,16 +296,118 @@ export class AnthropicProvider implements ModelProvider {
   }
 
   private formatMessages(messages: Message[]): any[] {
-    return messages.map((msg) => ({
-      role: msg.role === 'system' ? 'user' : msg.role,
-      content: msg.content.map((block) => {
-        if (block.type !== 'tool_result') return block;
-        return {
-          ...block,
-          content: formatToolResult(block.content),
-        };
-      }),
-    }));
+    return messages.map((msg) => {
+      const blocks = getMessageBlocks(msg);
+      let degraded = false;
+      const content = blocks.map((block) => {
+        if (block.type === 'text') {
+          return { type: 'text', text: block.text };
+        }
+        if (block.type === 'reasoning') {
+          if (this.reasoningTransport === 'text') {
+            return { type: 'text', text: `<think>${block.reasoning}</think>` };
+          }
+          return { type: 'thinking', thinking: block.reasoning };
+        }
+        if (block.type === 'image') {
+          if (block.base64 && block.mime_type) {
+            return {
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: block.mime_type,
+                data: block.base64,
+              },
+            };
+          }
+          degraded = true;
+          return { type: 'text', text: IMAGE_UNSUPPORTED_TEXT };
+        }
+        if (block.type === 'audio') {
+          degraded = true;
+          return { type: 'text', text: AUDIO_UNSUPPORTED_TEXT };
+        }
+        if (block.type === 'file') {
+          if (block.file_id) {
+            return {
+              type: 'document',
+              source: { type: 'file', file_id: block.file_id },
+            };
+          }
+          degraded = true;
+          return { type: 'text', text: FILE_UNSUPPORTED_TEXT };
+        }
+        if (block.type === 'tool_use') {
+          return {
+            type: 'tool_use',
+            id: block.id,
+            name: block.name,
+            input: block.input ?? {},
+          };
+        }
+        if (block.type === 'tool_result') {
+          return {
+            type: 'tool_result',
+            tool_use_id: block.tool_use_id,
+            content: formatToolResult(block.content),
+            is_error: block.is_error,
+          };
+        }
+        return block;
+      });
+
+      if (degraded) {
+        markTransportIfDegraded(msg, blocks);
+      }
+      return {
+        role: msg.role === 'system' ? 'user' : msg.role,
+        content,
+      };
+    });
+  }
+
+  async uploadFile(input: UploadFileInput): Promise<UploadFileResult | null> {
+    if (input.kind !== 'file') {
+      return null;
+    }
+    const FormDataCtor = (globalThis as any).FormData;
+    const BlobCtor = (globalThis as any).Blob;
+    if (!FormDataCtor || !BlobCtor) {
+      return null;
+    }
+    const endpoint = `${normalizeAnthropicBaseUrl(this.baseUrl)}/v1/files`;
+    const form = new FormDataCtor();
+    form.append('file', new BlobCtor([input.data], { type: input.mimeType }), input.filename || 'file.pdf');
+    form.append('purpose', 'document');
+
+    const response = await fetch(
+      endpoint,
+      withProxy(
+        {
+          method: 'POST',
+          headers: {
+            'x-api-key': this.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-beta': 'files-api-2025-04-14',
+            ...(this.extraHeaders || {}),
+          },
+          body: form,
+        },
+        this.dispatcher
+      )
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Anthropic file upload error: ${response.status} ${error}`);
+    }
+
+    const data: any = await response.json();
+    const fileId = data?.id ?? data?.file_id;
+    if (!fileId) {
+      return null;
+    }
+    return { fileId };
   }
 
   toConfig(): ModelConfig {
@@ -234,6 +418,11 @@ export class AnthropicProvider implements ModelProvider {
       apiKey: this.apiKey,
       maxTokens: this.maxOutputTokens,
       temperature: this.temperature,
+      reasoningTransport: this.reasoningTransport,
+      extraHeaders: this.extraHeaders,
+      extraBody: this.extraBody,
+      providerOptions: this.providerOptions,
+      multimodal: this.multimodal,
     };
   }
 }
@@ -245,16 +434,98 @@ export class OpenAIProvider implements ModelProvider {
   readonly model: string;
   private readonly baseUrl: string;
   private readonly dispatcher?: any;
+  private readonly reasoningTransport?: ModelConfig['reasoningTransport'];
+  private readonly extraHeaders?: Record<string, string>;
+  private readonly extraBody?: Record<string, any>;
+  private readonly providerOptions?: Record<string, any>;
+  private readonly multimodal?: ModelConfig['multimodal'];
+  private readonly providerName: string;
+  private readonly openaiApi: 'chat' | 'responses';
 
   constructor(
     private apiKey: string,
     model: string = 'gpt-4o',
     baseUrl: string = 'https://api.openai.com/v1',
-    proxyUrl?: string
+    proxyUrl?: string,
+    options?: {
+      providerName?: string;
+      reasoningTransport?: ModelConfig['reasoningTransport'];
+      extraHeaders?: Record<string, string>;
+      extraBody?: Record<string, any>;
+      providerOptions?: Record<string, any>;
+      multimodal?: ModelConfig['multimodal'];
+    }
   ) {
     this.model = model;
     this.baseUrl = normalizeBaseUrl(baseUrl);
     this.dispatcher = getProxyDispatcher(proxyUrl);
+    this.providerName = options?.providerName ?? 'openai';
+    this.reasoningTransport =
+      options?.reasoningTransport ??
+      (this.providerName === 'openai' || this.providerName === 'gemini' ? 'text' : 'provider');
+    this.extraHeaders = options?.extraHeaders;
+    this.extraBody = options?.extraBody;
+    this.providerOptions = options?.providerOptions;
+    this.multimodal = options?.multimodal;
+    this.openaiApi = (this.providerOptions?.openaiApi as 'chat' | 'responses') || 'chat';
+  }
+
+  private applyReasoningDefaults(body: any): void {
+    if (this.reasoningTransport !== 'provider') {
+      return;
+    }
+    if (this.providerName === 'glm') {
+      if (!body.thinking) {
+        body.thinking = { type: 'enabled', clear_thinking: false };
+      }
+    }
+    if (this.providerName === 'minimax') {
+      if (body.reasoning_split === undefined) {
+        body.reasoning_split = true;
+      }
+    }
+  }
+
+  async uploadFile(input: UploadFileInput): Promise<UploadFileResult | null> {
+    if (input.kind !== 'file') {
+      return null;
+    }
+    const FormDataCtor = (globalThis as any).FormData;
+    const BlobCtor = (globalThis as any).Blob;
+    if (!FormDataCtor || !BlobCtor) {
+      return null;
+    }
+    const form = new FormDataCtor();
+    form.append('file', new BlobCtor([input.data], { type: input.mimeType }), input.filename || 'file.pdf');
+    const purpose = (this.providerOptions?.fileUploadPurpose as string) || 'assistants';
+    form.append('purpose', purpose);
+
+    const response = await fetch(
+      `${this.baseUrl}/files`,
+      withProxy(
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            ...(this.extraHeaders || {}),
+          },
+          body: form,
+        },
+        this.dispatcher
+      )
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI file upload error: ${response.status} ${error}`);
+    }
+
+    const data: any = await response.json();
+    const fileId = data?.id ?? data?.file_id;
+    if (!fileId) {
+      return null;
+    }
+    return { fileId };
   }
 
   async complete(
@@ -267,9 +538,15 @@ export class OpenAIProvider implements ModelProvider {
       stream?: boolean;
     }
   ): Promise<ModelResponse> {
+    const responseApi = this.resolveOpenAIApi(messages);
+    if (responseApi === 'responses') {
+      return this.completeWithResponses(messages, opts);
+    }
+
     const body: any = {
+      ...(this.extraBody || {}),
       model: this.model,
-      messages: buildOpenAIMessages(messages, opts?.system),
+      messages: buildOpenAIMessages(messages, opts?.system, this.reasoningTransport, this.providerName),
     };
 
     if (opts?.tools && opts.tools.length > 0) {
@@ -277,6 +554,7 @@ export class OpenAIProvider implements ModelProvider {
     }
     if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    this.applyReasoningDefaults(body);
 
     const response = await fetch(
       `${this.baseUrl}/chat/completions`,
@@ -286,6 +564,7 @@ export class OpenAIProvider implements ModelProvider {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.apiKey}`,
+            ...(this.extraHeaders || {}),
           },
           body: JSON.stringify(body),
         },
@@ -325,9 +604,14 @@ export class OpenAIProvider implements ModelProvider {
       });
     }
 
+    const reasoningBlocks = extractReasoningDetails(message);
+    const combinedBlocks =
+      reasoningBlocks.length > 0 ? [...reasoningBlocks, ...contentBlocks] : contentBlocks;
+
+    const normalizedBlocks = normalizeThinkBlocks(combinedBlocks, this.reasoningTransport);
     return {
       role: 'assistant',
-      content: contentBlocks,
+      content: normalizedBlocks,
       usage: data.usage
         ? {
             input_tokens: data.usage.prompt_tokens ?? 0,
@@ -347,9 +631,46 @@ export class OpenAIProvider implements ModelProvider {
       system?: string;
     }
   ): AsyncIterable<ModelStreamChunk> {
+    const responseApi = this.resolveOpenAIApi(messages);
+    if (responseApi === 'responses') {
+      const response = await this.completeWithResponses(messages, opts);
+      let index = 0;
+      for (const block of response.content) {
+        if (block.type === 'text') {
+          yield { type: 'content_block_start', index, content_block: { type: 'text', text: '' } };
+          if (block.text) {
+            yield { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } };
+          }
+          yield { type: 'content_block_stop', index };
+          index += 1;
+          continue;
+        }
+        if (block.type === 'reasoning') {
+          yield { type: 'content_block_start', index, content_block: { type: 'reasoning', reasoning: '' } };
+          if (block.reasoning) {
+            yield { type: 'content_block_delta', index, delta: { type: 'reasoning_delta', text: block.reasoning } };
+          }
+          yield { type: 'content_block_stop', index };
+          index += 1;
+        }
+      }
+      if (response.usage) {
+        yield {
+          type: 'message_delta',
+          usage: {
+            input_tokens: response.usage.input_tokens ?? 0,
+            output_tokens: response.usage.output_tokens ?? 0,
+          },
+        };
+      }
+      yield { type: 'message_stop' };
+      return;
+    }
+
     const body: any = {
+      ...(this.extraBody || {}),
       model: this.model,
-      messages: buildOpenAIMessages(messages, opts?.system),
+      messages: buildOpenAIMessages(messages, opts?.system, this.reasoningTransport, this.providerName),
       stream: true,
       stream_options: { include_usage: true },
     };
@@ -359,6 +680,7 @@ export class OpenAIProvider implements ModelProvider {
     }
     if (opts?.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    this.applyReasoningDefaults(body);
 
     const response = await fetch(
       `${this.baseUrl}/chat/completions`,
@@ -368,6 +690,7 @@ export class OpenAIProvider implements ModelProvider {
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${this.apiKey}`,
+            ...(this.extraHeaders || {}),
           },
           body: JSON.stringify(body),
         },
@@ -387,6 +710,8 @@ export class OpenAIProvider implements ModelProvider {
     let buffer = '';
     let textStarted = false;
     const textIndex = 0;
+    let reasoningStarted = false;
+    const reasoningIndex = 1000;
     let sawFinishReason = false;
     let usageEmitted = false;
     const toolCallBuffers = new Map<number, { id?: string; name?: string; args: string }>();
@@ -458,6 +783,23 @@ export class OpenAIProvider implements ModelProvider {
           };
         }
 
+        if (typeof (delta as any).reasoning_content === 'string') {
+          const reasoningText = (delta as any).reasoning_content;
+          if (!reasoningStarted) {
+            reasoningStarted = true;
+            yield {
+              type: 'content_block_start',
+              index: reasoningIndex,
+              content_block: { type: 'reasoning', reasoning: '' },
+            };
+          }
+          yield {
+            type: 'content_block_delta',
+            index: reasoningIndex,
+            delta: { type: 'reasoning_delta', text: reasoningText },
+          };
+        }
+
         const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
         for (const call of toolCalls) {
           const index = typeof call.index === 'number' ? call.index : 0;
@@ -490,6 +832,9 @@ export class OpenAIProvider implements ModelProvider {
     if (textStarted) {
       yield { type: 'content_block_stop', index: textIndex };
     }
+    if (reasoningStarted) {
+      yield { type: 'content_block_stop', index: reasoningIndex };
+    }
     if (toolCallBuffers.size > 0) {
       yield* flushToolCalls();
     }
@@ -503,12 +848,96 @@ export class OpenAIProvider implements ModelProvider {
 
   toConfig(): ModelConfig {
     return {
-      provider: 'openai',
+      provider: this.providerName,
       model: this.model,
       baseUrl: this.baseUrl,
       apiKey: this.apiKey,
       maxTokens: this.maxOutputTokens,
       temperature: this.temperature,
+      reasoningTransport: this.reasoningTransport,
+      extraHeaders: this.extraHeaders,
+      extraBody: this.extraBody,
+      providerOptions: this.providerOptions,
+      multimodal: this.multimodal,
+    };
+  }
+
+  private resolveOpenAIApi(messages: Message[]): 'chat' | 'responses' {
+    if (this.openaiApi !== 'responses') {
+      return 'chat';
+    }
+    const hasFile = messages.some((message) =>
+      getMessageBlocks(message).some((block) => block.type === 'file')
+    );
+    return hasFile ? 'responses' : 'chat';
+  }
+
+  private async completeWithResponses(
+    messages: Message[],
+    opts?: {
+      tools?: any[];
+      maxTokens?: number;
+      temperature?: number;
+      system?: string;
+      stream?: boolean;
+    }
+  ): Promise<ModelResponse> {
+    const input = buildOpenAIResponsesInput(messages, this.reasoningTransport);
+    const body: any = {
+      ...(this.extraBody || {}),
+      model: this.model,
+      input,
+    };
+
+    if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    if (opts?.maxTokens !== undefined) body.max_output_tokens = opts.maxTokens;
+    if (opts?.system) body.instructions = opts.system;
+    this.applyReasoningDefaults(body);
+
+    const response = await fetch(
+      `${this.baseUrl}/responses`,
+      withProxy(
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.apiKey}`,
+            ...(this.extraHeaders || {}),
+          },
+          body: JSON.stringify(body),
+        },
+        this.dispatcher
+      )
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenAI API error: ${response.status} ${error}`);
+    }
+
+    const data: any = await response.json();
+    const contentBlocks: ContentBlock[] = [];
+    const outputs = Array.isArray(data.output) ? data.output : [];
+    for (const output of outputs) {
+      const parts = output?.content || [];
+      for (const part of parts) {
+        if (part.type === 'output_text' && typeof part.text === 'string') {
+          contentBlocks.push({ type: 'text', text: part.text });
+        }
+      }
+    }
+
+    const normalizedBlocks = normalizeThinkBlocks(contentBlocks, this.reasoningTransport);
+    return {
+      role: 'assistant',
+      content: normalizedBlocks,
+      usage: data.usage
+        ? {
+            input_tokens: data.usage.input_tokens ?? 0,
+            output_tokens: data.usage.output_tokens ?? 0,
+          }
+        : undefined,
+      stop_reason: data.status,
     };
   }
 }
@@ -520,16 +949,75 @@ export class GeminiProvider implements ModelProvider {
   readonly model: string;
   private readonly baseUrl: string;
   private readonly dispatcher?: any;
+  private readonly reasoningTransport?: ModelConfig['reasoningTransport'];
+  private readonly extraHeaders?: Record<string, string>;
+  private readonly extraBody?: Record<string, any>;
+  private readonly providerOptions?: Record<string, any>;
+  private readonly multimodal?: ModelConfig['multimodal'];
 
   constructor(
     private apiKey: string,
     model: string = 'gemini-3.0-flash',
     baseUrl: string = 'https://generativelanguage.googleapis.com/v1beta',
-    proxyUrl?: string
+    proxyUrl?: string,
+    options?: {
+      reasoningTransport?: ModelConfig['reasoningTransport'];
+      extraHeaders?: Record<string, string>;
+      extraBody?: Record<string, any>;
+      providerOptions?: Record<string, any>;
+      multimodal?: ModelConfig['multimodal'];
+    }
   ) {
     this.model = model;
     this.baseUrl = normalizeGeminiBaseUrl(baseUrl);
     this.dispatcher = getProxyDispatcher(proxyUrl);
+    this.reasoningTransport = options?.reasoningTransport ?? 'text';
+    this.extraHeaders = options?.extraHeaders;
+    this.extraBody = options?.extraBody;
+    this.providerOptions = options?.providerOptions;
+    this.multimodal = options?.multimodal;
+  }
+
+  async uploadFile(input: UploadFileInput): Promise<UploadFileResult | null> {
+    if (input.kind !== 'file') {
+      return null;
+    }
+    const url = new URL(`${this.baseUrl}/files`);
+    url.searchParams.set('key', this.apiKey);
+    const body = {
+      file: {
+        display_name: input.filename || 'file.pdf',
+        mime_type: input.mimeType,
+      },
+      content: input.data.toString('base64'),
+    };
+
+    const response = await fetch(
+      url.toString(),
+      withProxy(
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.extraHeaders || {}),
+          },
+          body: JSON.stringify(body),
+        },
+        this.dispatcher
+      )
+    );
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Gemini file upload error: ${response.status} ${error}`);
+    }
+
+    const data: any = await response.json();
+    const fileUri = data?.file?.uri ?? data?.uri ?? data?.file_uri;
+    if (!fileUri) {
+      return null;
+    }
+    return { fileUri };
   }
 
   async complete(
@@ -542,12 +1030,16 @@ export class GeminiProvider implements ModelProvider {
       stream?: boolean;
     }
   ): Promise<ModelResponse> {
-    const body: any = buildGeminiRequestBody(messages, {
+    const body: any = {
+      ...(this.extraBody || {}),
+      ...buildGeminiRequestBody(messages, {
       system: opts?.system,
       tools: opts?.tools,
       maxTokens: opts?.maxTokens ?? this.maxOutputTokens,
       temperature: opts?.temperature ?? this.temperature,
-    });
+      reasoningTransport: this.reasoningTransport,
+    }),
+    };
 
     const url = buildGeminiUrl(this.baseUrl, this.model, 'generateContent', this.apiKey);
     const response = await fetch(
@@ -557,6 +1049,7 @@ export class GeminiProvider implements ModelProvider {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(this.extraHeaders || {}),
           },
           body: JSON.stringify(body),
         },
@@ -571,7 +1064,10 @@ export class GeminiProvider implements ModelProvider {
 
     const data: any = await response.json();
     const candidate = data?.candidates?.[0];
-    const contentBlocks = extractGeminiContentBlocks(candidate?.content);
+    const contentBlocks = normalizeThinkBlocks(
+      extractGeminiContentBlocks(candidate?.content),
+      this.reasoningTransport
+    );
     const usage = data?.usageMetadata;
 
     return {
@@ -596,12 +1092,16 @@ export class GeminiProvider implements ModelProvider {
       system?: string;
     }
   ): AsyncIterable<ModelStreamChunk> {
-    const body: any = buildGeminiRequestBody(messages, {
+    const body: any = {
+      ...(this.extraBody || {}),
+      ...buildGeminiRequestBody(messages, {
       system: opts?.system,
       tools: opts?.tools,
       maxTokens: opts?.maxTokens ?? this.maxOutputTokens,
       temperature: opts?.temperature ?? this.temperature,
-    });
+      reasoningTransport: this.reasoningTransport,
+    }),
+    };
 
     const url = buildGeminiUrl(this.baseUrl, this.model, 'streamGenerateContent', this.apiKey);
     const response = await fetch(
@@ -611,6 +1111,7 @@ export class GeminiProvider implements ModelProvider {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(this.extraHeaders || {}),
           },
           body: JSON.stringify(body),
         },
@@ -772,6 +1273,11 @@ export class GeminiProvider implements ModelProvider {
       apiKey: this.apiKey,
       maxTokens: this.maxOutputTokens,
       temperature: this.temperature,
+      reasoningTransport: this.reasoningTransport,
+      extraHeaders: this.extraHeaders,
+      extraBody: this.extraBody,
+      providerOptions: this.providerOptions,
+      multimodal: this.multimodal,
     };
   }
 }
@@ -786,6 +1292,32 @@ function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
 }
 
+function hasAnthropicFileBlocks(messages: Message[]): boolean {
+  for (const msg of messages) {
+    for (const block of getMessageBlocks(msg)) {
+      if (block.type === 'file' && block.file_id) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function mergeAnthropicBetaHeader(existing: string | undefined, entries: string[]): string | undefined {
+  const tokens = new Set<string>();
+  if (existing) {
+    for (const part of existing.split(',')) {
+      const trimmed = part.trim();
+      if (trimmed) tokens.add(trimmed);
+    }
+  }
+  for (const entry of entries) {
+    if (entry) tokens.add(entry);
+  }
+  if (tokens.size === 0) return existing;
+  return Array.from(tokens).join(',');
+}
+
 function buildOpenAITools(tools: any[]): any[] {
   return tools.map((tool) => ({
     type: 'function',
@@ -797,12 +1329,20 @@ function buildOpenAITools(tools: any[]): any[] {
   }));
 }
 
-function buildOpenAIMessages(messages: Message[], system?: string): any[] {
+function buildOpenAIMessages(
+  messages: Message[],
+  system?: string,
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text',
+  providerName: string = 'openai'
+): any[] {
   const output: any[] = [];
   const toolCallNames = new Map<string, string>();
+  const useStructuredContent = messages.some((msg) =>
+    getMessageBlocks(msg).some((block) => block.type === 'image' || block.type === 'audio' || block.type === 'file')
+  );
 
   for (const msg of messages) {
-    for (const block of msg.content) {
+    for (const block of getMessageBlocks(msg)) {
       if (block.type === 'tool_use') {
         toolCallNames.set(block.id, block.name);
       }
@@ -810,29 +1350,37 @@ function buildOpenAIMessages(messages: Message[], system?: string): any[] {
   }
 
   if (system) {
-    output.push({ role: 'system', content: system });
+    output.push({
+      role: 'system',
+      content: useStructuredContent ? [{ type: 'text', text: system }] : system,
+    });
   }
 
   for (const msg of messages) {
+    const blocks = getMessageBlocks(msg);
     if (msg.role === 'system') {
-      const text = joinTextBlocks(msg.content);
+      const text = concatTextWithReasoning(blocks, reasoningTransport);
       if (text) {
-        output.push({ role: 'system', content: text });
+        output.push({
+          role: 'system',
+          content: useStructuredContent ? [{ type: 'text', text }] : text,
+        });
       }
       continue;
     }
 
     if (msg.role === 'assistant') {
-      const text = joinTextBlocks(msg.content);
-      const toolCalls = msg.content.filter((block) => block.type === 'tool_use') as Array<{
+      const text = concatTextWithReasoning(blocks, reasoningTransport);
+      const toolCalls = blocks.filter((block) => block.type === 'tool_use') as Array<{
         id: string;
         name: string;
         input: any;
       }>;
+      const reasoningBlocks = blocks.filter((block) => block.type === 'reasoning');
 
       const entry: any = { role: 'assistant' };
       if (text) {
-        entry.content = text;
+        entry.content = useStructuredContent ? [{ type: 'text', text }] : text;
       }
       if (toolCalls.length > 0) {
         entry.tool_calls = toolCalls.map((call) => ({
@@ -845,39 +1393,28 @@ function buildOpenAIMessages(messages: Message[], system?: string): any[] {
         }));
         if (!entry.content) entry.content = null;
       }
+      if (reasoningTransport === 'provider' && reasoningBlocks.length > 0) {
+        if (providerName === 'glm') {
+          entry.reasoning_content = joinReasoningBlocks(reasoningBlocks);
+        } else if (providerName === 'minimax') {
+          entry.reasoning_details = reasoningBlocks.map((block: any) => ({ text: block.reasoning }));
+        }
+      }
 
-      if (entry.content !== undefined || entry.tool_calls) {
+      if (entry.content !== undefined || entry.tool_calls || entry.reasoning_content || entry.reasoning_details) {
         output.push(entry);
       }
       continue;
     }
 
     if (msg.role === 'user') {
-      let textBuffer = '';
-      const flushText = () => {
-        if (!textBuffer) return;
-        output.push({ role: 'user', content: textBuffer });
-        textBuffer = '';
-      };
-
-      for (const block of msg.content) {
-        if (block.type === 'text') {
-          textBuffer += block.text;
-          continue;
-        }
-        if (block.type === 'tool_result') {
-          flushText();
-          const toolMessage: any = {
-            role: 'tool',
-            tool_call_id: block.tool_use_id,
-            content: formatToolResult(block.content),
-          };
-          const name = toolCallNames.get(block.tool_use_id) ?? 'tool';
-          toolMessage.name = name;
-          output.push(toolMessage);
-        }
+      const result = buildOpenAIUserMessages(blocks, toolCallNames, reasoningTransport);
+      if (result.degraded) {
+        markTransportIfDegraded(msg, blocks);
       }
-      flushText();
+      for (const entry of result.entries) {
+        output.push(entry);
+      }
     }
   }
 
@@ -917,10 +1454,11 @@ function buildGeminiRequestBody(
     tools?: any[];
     maxTokens?: number;
     temperature?: number;
+    reasoningTransport?: ModelConfig['reasoningTransport'];
   }
 ): any {
-  const systemInstruction = buildGeminiSystemInstruction(messages, opts.system);
-  const contents = buildGeminiContents(messages);
+  const systemInstruction = buildGeminiSystemInstruction(messages, opts.system, opts.reasoningTransport);
+  const contents = buildGeminiContents(messages, opts.reasoningTransport);
   const tools = opts.tools && opts.tools.length > 0 ? buildGeminiTools(opts.tools) : undefined;
 
   const generationConfig: any = {};
@@ -944,25 +1482,32 @@ function buildGeminiRequestBody(
   return body;
 }
 
-function buildGeminiSystemInstruction(messages: Message[], system?: string): string | undefined {
+function buildGeminiSystemInstruction(
+  messages: Message[],
+  system?: string,
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): string | undefined {
   const parts: string[] = [];
   if (system) parts.push(system);
   for (const msg of messages) {
     if (msg.role !== 'system') continue;
-    const text = joinTextBlocks(msg.content);
+    const text = concatTextWithReasoning(getMessageBlocks(msg), reasoningTransport);
     if (text) parts.push(text);
   }
   if (parts.length === 0) return undefined;
   return parts.join('\n\n---\n\n');
 }
 
-function buildGeminiContents(messages: Message[]): any[] {
+function buildGeminiContents(
+  messages: Message[],
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): any[] {
   const contents: any[] = [];
   const toolNameById = new Map<string, string>();
   const toolSignatureById = new Map<string, string>();
 
   for (const msg of messages) {
-    for (const block of msg.content) {
+    for (const block of getMessageBlocks(msg)) {
       if (block.type === 'tool_use') {
         toolNameById.set(block.id, block.name);
         const signature = (block as any).meta?.thought_signature ?? (block as any).meta?.thoughtSignature;
@@ -977,9 +1522,35 @@ function buildGeminiContents(messages: Message[]): any[] {
     if (msg.role === 'system') continue;
     const role = msg.role === 'assistant' ? 'model' : 'user';
     const parts: any[] = [];
-    for (const block of msg.content) {
+    let degraded = false;
+    const blocks = getMessageBlocks(msg);
+    for (const block of blocks) {
       if (block.type === 'text') {
         if (block.text) parts.push({ text: block.text });
+      } else if (block.type === 'reasoning') {
+        if (reasoningTransport === 'text') {
+          const text = `<think>${block.reasoning}</think>`;
+          parts.push({ text });
+        }
+      } else if (block.type === 'image') {
+        const imagePart = buildGeminiImagePart(block);
+        if (imagePart) {
+          parts.push(imagePart);
+        } else {
+          degraded = true;
+          parts.push({ text: IMAGE_UNSUPPORTED_TEXT });
+        }
+      } else if (block.type === 'audio') {
+        degraded = true;
+        parts.push({ text: AUDIO_UNSUPPORTED_TEXT });
+      } else if (block.type === 'file') {
+        const filePart = buildGeminiFilePart(block);
+        if (filePart) {
+          parts.push(filePart);
+        } else {
+          degraded = true;
+          parts.push({ text: FILE_UNSUPPORTED_TEXT });
+        }
       } else if (block.type === 'tool_use') {
         const part: any = {
           functionCall: {
@@ -1001,6 +1572,9 @@ function buildGeminiContents(messages: Message[]): any[] {
           },
         });
       }
+    }
+    if (degraded) {
+      markTransportIfDegraded(msg, blocks);
     }
     if (parts.length > 0) {
       contents.push({ role, parts });
@@ -1163,4 +1737,347 @@ function safeJsonStringify(value: any): string {
   } catch {
     return '{}';
   }
+}
+
+const FILE_UNSUPPORTED_TEXT =
+  '[file unsupported] This model does not support PDF input. Please extract text or images first.';
+const IMAGE_UNSUPPORTED_TEXT =
+  '[image unsupported] This model does not support image URLs; please provide base64 data if supported.';
+const AUDIO_UNSUPPORTED_TEXT =
+  '[audio unsupported] This model does not support audio input; please provide a text transcript instead.';
+
+function markTransportIfDegraded(message: Message, blocks: ContentBlock[]): void {
+  if (message.metadata?.transport === 'omit') {
+    return;
+  }
+  if (!message.metadata) {
+    message.metadata = { content_blocks: blocks, transport: 'text' };
+    return;
+  }
+  if (!message.metadata.content_blocks) {
+    message.metadata.content_blocks = blocks;
+  }
+  message.metadata.transport = 'text';
+}
+
+function getMessageBlocks(message: Message): ContentBlock[] {
+  if (message.metadata?.transport === 'omit') {
+    return message.content;
+  }
+  return message.metadata?.content_blocks ?? message.content;
+}
+
+function concatTextWithReasoning(
+  blocks: ContentBlock[],
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): string {
+  let text = '';
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      text += block.text;
+    } else if (block.type === 'reasoning' && reasoningTransport === 'text') {
+      text += `<think>${block.reasoning}</think>`;
+    }
+  }
+  return text;
+}
+
+function joinReasoningBlocks(blocks: ContentBlock[]): string {
+  return blocks
+    .filter((block): block is Extract<ContentBlock, { type: 'reasoning' }> => block.type === 'reasoning')
+    .map((block) => block.reasoning)
+    .join('\n');
+}
+
+function normalizeThinkBlocks(
+  blocks: ContentBlock[],
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): ContentBlock[] {
+  if (reasoningTransport !== 'text') {
+    return blocks;
+  }
+  const output: ContentBlock[] = [];
+  for (const block of blocks) {
+    if (block.type !== 'text') {
+      output.push(block);
+      continue;
+    }
+    const parts = splitThinkText(block.text);
+    if (parts.length === 0) {
+      output.push(block);
+    } else {
+      output.push(...parts);
+    }
+  }
+  return output;
+}
+
+function splitThinkText(text: string): ContentBlock[] {
+  const blocks: ContentBlock[] = [];
+  const regex = /<think>([\s\S]*?)<\/think>/g;
+  let match: RegExpExecArray | null;
+  let cursor = 0;
+  let matched = false;
+
+  while ((match = regex.exec(text)) !== null) {
+    matched = true;
+    const before = text.slice(cursor, match.index);
+    if (before) {
+      blocks.push({ type: 'text', text: before });
+    }
+    const reasoning = match[1] || '';
+    blocks.push({ type: 'reasoning', reasoning });
+    cursor = match.index + match[0].length;
+  }
+
+  if (!matched) {
+    return [];
+  }
+
+  const after = text.slice(cursor);
+  if (after) {
+    blocks.push({ type: 'text', text: after });
+  }
+  return blocks;
+}
+
+function extractReasoningDetails(message: any): ContentBlock[] {
+  const details = Array.isArray(message?.reasoning_details) ? message.reasoning_details : [];
+  const content = typeof message?.reasoning_content === 'string' ? message.reasoning_content : undefined;
+  const blocks: ContentBlock[] = [];
+  for (const detail of details) {
+    if (typeof detail?.text === 'string') {
+      blocks.push({ type: 'reasoning', reasoning: detail.text });
+    }
+  }
+  if (content) {
+    blocks.push({ type: 'reasoning', reasoning: content });
+  }
+  return blocks;
+}
+
+function buildOpenAIUserMessages(
+  blocks: ContentBlock[],
+  toolCallNames: Map<string, string>,
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): { entries: any[]; degraded: boolean } {
+  const entries: any[] = [];
+  let contentParts: any[] = [];
+  let degraded = false;
+
+  const appendText = (text: string) => {
+    if (!text) return;
+    const last = contentParts[contentParts.length - 1];
+    if (last && last.type === 'text') {
+      last.text += text;
+    } else {
+      contentParts.push({ type: 'text', text });
+    }
+  };
+
+  const flushUser = () => {
+    if (contentParts.length === 0) return;
+    entries.push({ role: 'user', content: contentParts });
+    contentParts = [];
+  };
+
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      appendText(block.text);
+      continue;
+    }
+    if (block.type === 'reasoning') {
+      if (reasoningTransport === 'text') {
+        appendText(`<think>${block.reasoning}</think>`);
+      }
+      continue;
+    }
+    if (block.type === 'image') {
+      if (block.url) {
+        contentParts.push({ type: 'image_url', image_url: { url: block.url } });
+      } else if (block.base64 && block.mime_type) {
+        contentParts.push({
+          type: 'image_url',
+          image_url: { url: `data:${block.mime_type};base64,${block.base64}` },
+        });
+      } else {
+        degraded = true;
+        appendText(IMAGE_UNSUPPORTED_TEXT);
+      }
+      continue;
+    }
+    if (block.type === 'audio') {
+      degraded = true;
+      appendText(AUDIO_UNSUPPORTED_TEXT);
+      continue;
+    }
+    if (block.type === 'file') {
+      degraded = true;
+      appendText(FILE_UNSUPPORTED_TEXT);
+      continue;
+    }
+    if (block.type === 'tool_result') {
+      flushUser();
+      const toolMessage: any = {
+        role: 'tool',
+        tool_call_id: block.tool_use_id,
+        content: formatToolResult(block.content),
+      };
+      const name = toolCallNames.get(block.tool_use_id);
+      if (name) toolMessage.name = name;
+      entries.push(toolMessage);
+      continue;
+    }
+  }
+
+  flushUser();
+  return { entries, degraded };
+}
+
+function buildOpenAIResponsesInput(
+  messages: Message[],
+  reasoningTransport: ModelConfig['reasoningTransport'] = 'text'
+): any[] {
+  const input: any[] = [];
+  for (const msg of messages) {
+    const blocks = getMessageBlocks(msg);
+    const parts: any[] = [];
+    let degraded = false;
+    const textType = msg.role === 'assistant' ? 'output_text' : 'input_text';
+    for (const block of blocks) {
+      if (block.type === 'text') {
+        parts.push({ type: textType, text: block.text });
+      } else if (block.type === 'reasoning' && reasoningTransport === 'text') {
+        parts.push({ type: textType, text: `<think>${block.reasoning}</think>` });
+      } else if (block.type === 'audio') {
+        degraded = true;
+        parts.push({ type: textType, text: AUDIO_UNSUPPORTED_TEXT });
+      } else if (block.type === 'file') {
+        if ((block as any).file_id) {
+          parts.push({ type: 'input_file', file_id: (block as any).file_id });
+        } else if (block.url) {
+          parts.push({ type: 'input_file', file_url: block.url });
+        } else if (block.base64 && block.mime_type) {
+          parts.push({
+            type: 'input_file',
+            filename: block.filename || 'file.pdf',
+            file_data: `data:${block.mime_type};base64,${block.base64}`,
+          });
+        } else {
+          degraded = true;
+          parts.push({ type: textType, text: FILE_UNSUPPORTED_TEXT });
+        }
+      }
+    }
+    if (degraded) {
+      markTransportIfDegraded(msg, blocks);
+    }
+    if (parts.length > 0) {
+      input.push({ role: msg.role, content: parts });
+    }
+  }
+  return input;
+}
+
+function buildGeminiImagePart(block: ImageContentBlock): any | null {
+  if (block.file_id) {
+    return { file_data: { mime_type: block.mime_type, file_uri: block.file_id } };
+  }
+  if (block.url) {
+    if (block.url.startsWith('gs://')) {
+      return { file_data: { mime_type: block.mime_type, file_uri: block.url } };
+    }
+    return null;
+  }
+  if (block.base64 && block.mime_type) {
+    return { inline_data: { mime_type: block.mime_type, data: block.base64 } };
+  }
+  return null;
+}
+
+function buildGeminiFilePart(block: FileContentBlock): any | null {
+  const mimeType = block.mime_type || 'application/pdf';
+  if (block.file_id) {
+    return { file_data: { mime_type: mimeType, file_uri: block.file_id } };
+  }
+  if (block.url) {
+    if (block.url.startsWith('gs://')) {
+      return { file_data: { mime_type: mimeType, file_uri: block.url } };
+    }
+    return null;
+  }
+  if (block.base64) {
+    return { inline_data: { mime_type: mimeType, data: block.base64 } };
+  }
+  return null;
+}
+
+function normalizeAnthropicContent(content: any[], reasoningTransport?: ModelConfig['reasoningTransport']): ContentBlock[] {
+  if (!Array.isArray(content)) return [];
+  const blocks: ContentBlock[] = [];
+  for (const block of content) {
+    const normalized = normalizeAnthropicContentBlock(block, reasoningTransport);
+    if (normalized) blocks.push(normalized);
+  }
+  return blocks;
+}
+
+function normalizeAnthropicContentBlock(
+  block: any,
+  reasoningTransport?: ModelConfig['reasoningTransport']
+): ContentBlock | null {
+  if (!block || typeof block !== 'object') return null;
+  if (block.type === 'thinking') {
+    if (reasoningTransport === 'text') {
+      return { type: 'text', text: `<think>${block.thinking ?? ''}</think>` };
+    }
+    return { type: 'reasoning', reasoning: block.thinking ?? '' };
+  }
+  if (block.type === 'text') {
+    return { type: 'text', text: block.text ?? '' };
+  }
+  if (block.type === 'image' && block.source?.type === 'base64') {
+    return {
+      type: 'image',
+      base64: block.source.data,
+      mime_type: block.source.media_type,
+    };
+  }
+  if (block.type === 'document' && block.source?.type === 'file') {
+    return {
+      type: 'file',
+      file_id: block.source.file_id,
+      mime_type: block.source.media_type,
+    };
+  }
+  if (block.type === 'tool_use') {
+    return {
+      type: 'tool_use',
+      id: block.id,
+      name: block.name,
+      input: block.input ?? {},
+    };
+  }
+  if (block.type === 'tool_result') {
+    return {
+      type: 'tool_result',
+      tool_use_id: block.tool_use_id,
+      content: block.content,
+      is_error: block.is_error,
+    };
+  }
+  return null;
+}
+
+function normalizeAnthropicDelta(delta: any): { type: 'text_delta' | 'input_json_delta' | 'reasoning_delta'; text?: string; partial_json?: string } {
+  if (!delta) {
+    return { type: 'text_delta', text: '' };
+  }
+  if (delta.type === 'thinking_delta') {
+    return { type: 'reasoning_delta', text: delta.thinking ?? '' };
+  }
+  if (delta.type === 'input_json_delta') {
+    return { type: 'input_json_delta', partial_json: delta.partial_json ?? '' };
+  }
+  return { type: 'text_delta', text: delta.text ?? '' };
 }

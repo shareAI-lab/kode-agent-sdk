@@ -310,7 +310,7 @@ runner
     expect.toBeTruthy(resumedEvents.includes('text_chunk'));
     expect.toBeTruthy(resumedEvents.includes('done'));
     const snapshotCountAfter = snapshotLog.length;
-    expect.toContain(resumedResult.text, '[hook-run-1]', resumedResult.text);
+    expect.toContain(resumedResult.text, '[hook-run-2]', resumedResult.text);
     expect.toBeGreaterThanOrEqual(snapshotCountAfter, snapshotCountBefore);
 
     const todosAfterResume = resumed.getTodos();

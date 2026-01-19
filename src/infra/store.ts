@@ -39,6 +39,16 @@ export interface RecoveredFile {
   timestamp: number;
 }
 
+export interface MediaCacheRecord {
+  key: string;
+  provider: string;
+  mimeType: string;
+  sizeBytes: number;
+  fileId?: string;
+  fileUri?: string;
+  createdAt: number;
+}
+
 // ============================================================================
 // Store Interface - 明确职责分离
 // ============================================================================
@@ -92,6 +102,13 @@ export interface Store {
   saveRecoveredFile(agentId: string, file: RecoveredFile): Promise<void>;
   /** 加载所有恢复文件 */
   loadRecoveredFiles(agentId: string): Promise<RecoveredFile[]>;
+
+  // ========== 多模态缓存管理 ==========
+
+  /** 保存多模态缓存 */
+  saveMediaCache(agentId: string, records: MediaCacheRecord[]): Promise<void>;
+  /** 加载多模态缓存 */
+  loadMediaCache(agentId: string): Promise<MediaCacheRecord[]>;
 
   // ========== 快照管理 ==========
 
@@ -211,6 +228,10 @@ export class JSONStore implements Store {
       fs.mkdirSync(dir, { recursive: true });
     }
     return dir;
+  }
+
+  private getMediaCachePath(agentId: string): string {
+    return this.getRuntimePath(agentId, 'media-cache.json');
   }
 
   private getSnapshotsDir(agentId: string): string {
@@ -698,6 +719,24 @@ export class JSONStore implements Store {
         }
       }
       return recovered.sort((a, b) => a.timestamp - b.timestamp);
+    } catch {
+      return [];
+    }
+  }
+
+  async saveMediaCache(agentId: string, records: MediaCacheRecord[]): Promise<void> {
+    const fs = require('fs').promises;
+    const filePath = this.getMediaCachePath(agentId);
+    await fs.writeFile(filePath, JSON.stringify(records, null, 2), 'utf-8');
+  }
+
+  async loadMediaCache(agentId: string): Promise<MediaCacheRecord[]> {
+    const fs = require('fs').promises;
+    const filePath = this.getMediaCachePath(agentId);
+    try {
+      const data = await fs.readFile(filePath, 'utf-8');
+      const parsed = JSON.parse(data);
+      return Array.isArray(parsed) ? (parsed as MediaCacheRecord[]) : [];
     } catch {
       return [];
     }
