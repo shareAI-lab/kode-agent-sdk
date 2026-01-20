@@ -49,7 +49,35 @@ export function createDependencies(): AgentDependencies {
     templateRegistry: templates,
     sandboxFactory,
     toolRegistry: tools,
-    modelFactory: (config) => new AnthropicProvider(config.apiKey!, config.model, config.baseUrl),
+    // Configuration-driven model factory with provider-specific options
+    modelFactory: (config) => {
+      if (config.provider === 'anthropic') {
+        return new AnthropicProvider(config.apiKey!, config.model, config.baseUrl, config.proxyUrl, {
+          reasoningTransport: config.reasoningTransport,
+          thinking: config.thinking,
+          beta: { interleavedThinking: true },
+        });
+      }
+      if (config.provider === 'openai') {
+        return new OpenAIProvider(config.apiKey!, config.model, config.baseUrl, config.proxyUrl, {
+          api: config.api ?? 'chat',
+          reasoningTransport: config.reasoningTransport,
+          responses: config.responses,
+          reasoning: config.reasoning,
+        });
+      }
+      if (config.provider === 'gemini') {
+        return new GeminiProvider(config.apiKey!, config.model, config.baseUrl, config.proxyUrl, {
+          reasoningTransport: config.reasoningTransport,
+          thinking: config.thinking,
+        });
+      }
+      // Default to OpenAI-compatible provider
+      return new OpenAIProvider(config.apiKey!, config.model, config.baseUrl, config.proxyUrl, {
+        reasoningTransport: config.reasoningTransport,
+        reasoning: config.reasoning,
+      });
+    },
   };
 }
 ```

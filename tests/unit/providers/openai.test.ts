@@ -57,9 +57,13 @@ runner
     expect.toBeTruthy(typeof toolCall?.function?.arguments === 'string');
     expect.toBeTruthy(Array.isArray(capturedBody.tools));
   })
-  .test('GLM 自动注入 thinking 并回传 reasoning_content', async () => {
+  .test('GLM 使用 reasoning 配置注入 thinking 并回传 reasoning_content', async () => {
     const provider = new OpenAIProvider('test-key', 'glm-test', 'https://api.z.ai/api/paas/v4', undefined, {
-      providerName: 'glm',
+      reasoningTransport: 'provider',
+      reasoning: {
+        fieldName: 'reasoning_content',
+        requestParams: { thinking: { type: 'enabled', clear_thinking: false } },
+      },
     });
     const messages: Message[] = [
       { role: 'user', content: [{ type: 'text', text: 'hi' }] },
@@ -91,9 +95,13 @@ runner
     const assistant = capturedBody.messages.find((msg: any) => msg.role === 'assistant');
     expect.toEqual(assistant?.reasoning_content, 'step1');
   })
-  .test('MiniMax 自动注入 reasoning_split 并回传 reasoning_details', async () => {
+  .test('MiniMax 使用 reasoning 配置注入 reasoning_split 并回传 reasoning_details', async () => {
     const provider = new OpenAIProvider('test-key', 'minimax-test', 'https://api.minimax.io/v1', undefined, {
-      providerName: 'minimax',
+      reasoningTransport: 'provider',
+      reasoning: {
+        fieldName: 'reasoning_details',
+        requestParams: { reasoning_split: true },
+      },
     });
     const messages: Message[] = [
       { role: 'user', content: [{ type: 'text', text: 'hi' }] },
@@ -147,6 +155,83 @@ runner
     }
 
     expect.toEqual(messages[0].metadata?.transport, 'text');
+  })
+  .test('Responses API 配置注入 store 和 previous_response_id', async () => {
+    const provider = new OpenAIProvider('test-key', 'gpt-4o', 'https://api.openai.com/v1', undefined, {
+      api: 'responses',
+      responses: {
+        store: true,
+        previousResponseId: 'resp_abc123',
+        reasoning: { effort: 'high' },
+      },
+    });
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'file', url: 'https://example.com/doc.pdf', mime_type: 'application/pdf' }] },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    let capturedBody: any;
+    let capturedUrl: string = '';
+    globalThis.fetch = (async (url: any, init: any) => {
+      capturedUrl = url;
+      capturedBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        json: async () => ({
+          output: [{ content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 1, output_tokens: 1 },
+          status: 'completed',
+        }),
+      } as any;
+    }) as any;
+
+    try {
+      await provider.complete(messages);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect.toBeTruthy(capturedUrl.includes('/responses'));
+    expect.toEqual(capturedBody.store, true);
+    expect.toEqual(capturedBody.previous_response_id, 'resp_abc123');
+    expect.toEqual(capturedBody.reasoning?.effort, 'high');
+  })
+  .test('DeepSeek 配置 stripFromHistory 时不包含 reasoning_content', async () => {
+    const provider = new OpenAIProvider('test-key', 'deepseek-reasoner', 'https://api.deepseek.com/v1', undefined, {
+      reasoningTransport: 'provider',
+      reasoning: {
+        fieldName: 'reasoning_content',
+        stripFromHistory: true,
+      },
+    });
+    const messages: Message[] = [
+      { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      { role: 'assistant', content: [{ type: 'reasoning', reasoning: 'step1' }, { type: 'text', text: 'ok' }] },
+      { role: 'user', content: [{ type: 'text', text: 'continue' }] },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    let capturedBody: any;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: 'ok' } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+      } as any;
+    }) as any;
+
+    try {
+      await provider.complete(messages);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    const assistant = capturedBody.messages.find((msg: any) => msg.role === 'assistant');
+    expect.toEqual(assistant?.reasoning_content, undefined);
+    expect.toEqual(assistant?.content, 'ok');
   });
 
 export async function run() {

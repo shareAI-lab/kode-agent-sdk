@@ -2331,7 +2331,6 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         throw new Error('OpenAI provider requires apiKey');
       }
       return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
-        providerName: 'openai',
         reasoningTransport: config.reasoningTransport,
         extraHeaders: config.extraHeaders,
         extraBody: config.extraBody,
@@ -2351,16 +2350,38 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         multimodal: config.multimodal,
       });
     }
-    if (config.provider === 'glm' || config.provider === 'minimax') {
+    if (config.provider === 'glm') {
       if (!config.apiKey) {
-        throw new Error(`${config.provider} provider requires apiKey`);
+        throw new Error('GLM provider requires apiKey');
       }
       if (!config.baseUrl) {
-        throw new Error(`${config.provider} provider requires baseUrl`);
+        throw new Error('GLM provider requires baseUrl');
       }
       return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
-        providerName: config.provider,
-        reasoningTransport: config.reasoningTransport,
+        reasoningTransport: config.reasoningTransport ?? 'provider',
+        reasoning: {
+          fieldName: 'reasoning_content',
+          requestParams: { thinking: { type: 'enabled', clear_thinking: false } },
+        },
+        extraHeaders: config.extraHeaders,
+        extraBody: config.extraBody,
+        providerOptions: config.providerOptions,
+        multimodal: config.multimodal,
+      });
+    }
+    if (config.provider === 'minimax') {
+      if (!config.apiKey) {
+        throw new Error('Minimax provider requires apiKey');
+      }
+      if (!config.baseUrl) {
+        throw new Error('Minimax provider requires baseUrl');
+      }
+      return new OpenAIProvider(config.apiKey, config.model, config.baseUrl, config.proxyUrl, {
+        reasoningTransport: config.reasoningTransport ?? 'provider',
+        reasoning: {
+          fieldName: 'reasoning_details',
+          requestParams: { reasoning_split: true },
+        },
         extraHeaders: config.extraHeaders,
         extraBody: config.extraBody,
         providerOptions: config.providerOptions,

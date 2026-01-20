@@ -1,5 +1,6 @@
 import { defineTool } from '../../src/tools/define';
 import { ToolRegistry } from '../../src/tools/registry';
+import { builtin } from '../../src';
 
 export const alwaysOkTool = defineTool(
   {
@@ -35,6 +36,18 @@ export const alwaysFailTool = defineTool(
 );
 
 export function registerProviderTestTools(registry: ToolRegistry) {
+  // Register test tools
   registry.register(alwaysOkTool.name, () => alwaysOkTool);
   registry.register(alwaysFailTool.name, () => alwaysFailTool);
+
+  // Register builtin tools for integration tests
+  for (const tool of builtin.fs()) {
+    registry.register(tool.name, () => tool);
+  }
+  for (const tool of builtin.bash()) {
+    registry.register(tool.name, () => tool);
+  }
+  for (const tool of builtin.todo()) {
+    registry.register(tool.name, () => tool);
+  }
 }

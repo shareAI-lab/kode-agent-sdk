@@ -1,0 +1,205 @@
+name: CI Tests
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'refactor/**']
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ===========================================================================
+  # Stage 1: Fast checks (run on every commit)
+  # ===========================================================================
+  lint-and-typecheck:
+    name: Lint & TypeCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+  # ===========================================================================
+  # Stage 2: Provider E2E tests (run on every commit)
+  # ===========================================================================
+  provider-e2e:
+    name: Provider E2E
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests]
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        provider:
+          - anthropic
+          - openai
+          - gemini
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create test environment
+        run: |
+          cat > .env.test << 'EOF'
+          # Anthropic
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL_ID=${{ vars.ANTHROPIC_MODEL_ID }}
+          ANTHROPIC_BASE_URL=${{ vars.ANTHROPIC_BASE_URL }}
+          ANTHROPIC_ENABLE_INTERTWINED=0
+          ANTHROPIC_ENABLE_PDF=0
+
+          # OpenAI Chat
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL_ID=${{ vars.OPENAI_MODEL_ID }}
+          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }}
+          OPENAI_API=chat
+
+          # OpenAI Responses
+          OPENAI_RESPONSES_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_RESPONSES_MODEL_ID=${{ vars.OPENAI_RESPONSES_MODEL_ID }}
+          OPENAI_RESPONSES_BASE_URL=${{ vars.OPENAI_RESPONSES_BASE_URL }}
+          OPENAI_RESPONSES_API=responses
+          OPENAI_RESPONSES_REASONING_EFFORT=medium
+
+          # Gemini
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_ID=${{ vars.GEMINI_MODEL_ID }}
+          GEMINI_BASE_URL=${{ vars.GEMINI_BASE_URL }}
+          GEMINI_ENABLE_INTERTWINED=1
+          GEMINI_ENABLE_PDF=1
+          EOF
+
+      - name: Run Anthropic E2E
+        if: matrix.provider == 'anthropic'
+        run: npx ts-node tests/e2e/providers/anthropic.test.ts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Run OpenAI E2E
+        if: matrix.provider == 'openai'
+        run: npx ts-node tests/e2e/providers/openai.test.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
+      - name: Run Gemini E2E
+        if: matrix.provider == 'gemini'
+        run: npx ts-node tests/e2e/providers/gemini.test.ts
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # ===========================================================================
+  # Stage 3: Agent Integration tests (comprehensive agent workflow testing)
+  # ===========================================================================
+  agent-integration:
+    name: Agent Integration
+    runs-on: ubuntu-latest
+    needs: [provider-e2e]
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create test environment
+        run: |
+          cat > .env.test << 'EOF'
+          # Use OpenAI for integration tests (most reliable)
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL_ID=${{ vars.OPENAI_MODEL_ID }}
+          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }}
+          OPENAI_API=chat
+
+          # Anthropic backup
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL_ID=${{ vars.ANTHROPIC_MODEL_ID }}
+          ANTHROPIC_BASE_URL=${{ vars.ANTHROPIC_BASE_URL }}
+
+          # Gemini backup
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_ID=${{ vars.GEMINI_MODEL_ID }}
+          GEMINI_BASE_URL=${{ vars.GEMINI_BASE_URL }}
+          EOF
+
+      - name: Run Agent Integration Tests
+        run: npx ts-node tests/integration/agent/ci-integration.test.ts
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  # ===========================================================================
+  # Summary job
+  # ===========================================================================
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [lint-and-typecheck, unit-tests, provider-e2e, agent-integration]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "=== CI Results ==="
+          echo "Lint & TypeCheck: ${{ needs.lint-and-typecheck.result }}"
+          echo "Unit Tests: ${{ needs.unit-tests.result }}"
+          echo "Provider E2E: ${{ needs.provider-e2e.result }}"
+          echo "Agent Integration: ${{ needs.agent-integration.result }}"
+
+          if [ "${{ needs.lint-and-typecheck.result }}" == "failure" ] || \
+             [ "${{ needs.unit-tests.result }}" == "failure" ] || \
+             [ "${{ needs.provider-e2e.result }}" == "failure" ] || \
+             [ "${{ needs.agent-integration.result }}" == "failure" ]; then
+            echo "Some tests failed!"
+            exit 1
+          fi
+          echo "All CI checks passed!"
