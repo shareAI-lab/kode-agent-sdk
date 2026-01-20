@@ -223,8 +223,8 @@ This is the updated content of SKILL.md.
     expect.toBeTruthy(archivedSkills.length > 0);
     expect.toEqual(archivedSkills[0].originalName, skillName);
 
-    // 验证archived目录存在
-    const archivedDir = path.join(testSkillsDir, 'archived');
+    // 验证archived目录存在（注意：使用 .archived 而非 archived）
+    const archivedDir = path.join(testSkillsDir, '.archived');
     expect.toBeTruthy(await fs.access(archivedDir).then(() => true).catch(() => false));
   })
 
