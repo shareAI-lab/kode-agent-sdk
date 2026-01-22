@@ -666,8 +666,12 @@ export class Agent {
 
     const subAgent = await Agent.create(subConfig, this.deps);
     subAgent.lineage = [...this.lineage, this.agentId];
-    const result = await subAgent.complete(prompt);
-    return result;
+    try {
+      const result = await subAgent.complete(prompt);
+      return result;
+    } finally {
+      await (subAgent as any).sandbox?.dispose?.();
+    }
   }
 
   /**

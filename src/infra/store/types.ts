@@ -236,3 +236,187 @@ export interface QueryableStore extends Store {
    */
   aggregateStats(agentId: string): Promise<AgentStats>;
 }
+
+// ============================================================================
+// Database Configuration Types
+// ============================================================================
+
+/**
+ * PostgreSQL 连接配置
+ */
+export interface PostgresConfig {
+  /** 数据库主机地址 */
+  host: string;
+  /** 数据库端口，默认 5432 */
+  port?: number;
+  /** 数据库名称 */
+  database: string;
+  /** 用户名 */
+  user: string;
+  /** 密码 */
+  password: string;
+  /** SSL 配置 */
+  ssl?: boolean | { rejectUnauthorized?: boolean };
+  /** 连接池最大连接数，默认 10 */
+  max?: number;
+  /** 空闲连接超时（毫秒），默认 30000 */
+  idleTimeoutMillis?: number;
+  /** 连接超时（毫秒），默认 5000 */
+  connectionTimeoutMillis?: number;
+}
+
+// ============================================================================
+// Health Check & Metrics Types
+// ============================================================================
+
+/**
+ * Store 健康检查状态
+ */
+export interface StoreHealthStatus {
+  /** 整体健康状态 */
+  healthy: boolean;
+  /** 数据库连接状态 */
+  database: {
+    connected: boolean;
+    latencyMs?: number;
+  };
+  /** 文件系统状态 */
+  fileSystem: {
+    writable: boolean;
+  };
+  /** 检查时间 */
+  checkedAt: number;
+}
+
+/**
+ * 一致性检查结果
+ */
+export interface ConsistencyCheckResult {
+  /** 是否一致 */
+  consistent: boolean;
+  /** 发现的问题列表 */
+  issues: string[];
+  /** 检查时间 */
+  checkedAt: number;
+}
+
+/**
+ * Store 指标统计
+ */
+export interface StoreMetrics {
+  /** 操作计数 */
+  operations: {
+    saves: number;
+    loads: number;
+    queries: number;
+    deletes: number;
+  };
+  /** 性能指标 */
+  performance: {
+    avgLatencyMs: number;
+    maxLatencyMs: number;
+    minLatencyMs: number;
+  };
+  /** 存储统计 */
+  storage: {
+    totalAgents: number;
+    totalMessages: number;
+    totalToolCalls: number;
+    dbSizeBytes?: number;
+  };
+  /** 统计时间 */
+  collectedAt: number;
+}
+
+/**
+ * 分布式锁释放函数
+ */
+export type LockReleaseFn = () => Promise<void>;
+
+// ============================================================================
+// Store Factory Types
+// ============================================================================
+
+/**
+ * JSON Store 配置
+ */
+export interface JSONStoreConfig {
+  type: 'json';
+  baseDir: string;
+}
+
+/**
+ * SQLite Store 配置
+ */
+export interface SqliteStoreConfig {
+  type: 'sqlite';
+  dbPath: string;
+  fileStoreBaseDir?: string;
+}
+
+/**
+ * PostgreSQL Store 配置
+ */
+export interface PostgresStoreConfig {
+  type: 'postgres';
+  connection: PostgresConfig;
+  fileStoreBaseDir: string;
+}
+
+/**
+ * Store 工厂配置联合类型
+ */
+export type StoreConfig = JSONStoreConfig | SqliteStoreConfig | PostgresStoreConfig;
+
+// ============================================================================
+// Extended Store Interface - 高级功能
+// ============================================================================
+
+/**
+ * ExtendedStore 接口
+ * 扩展 QueryableStore，提供健康检查、一致性检查、分布式锁等高级功能
+ */
+export interface ExtendedStore extends QueryableStore {
+  /**
+   * 健康检查
+   * @returns 健康状态
+   */
+  healthCheck(): Promise<StoreHealthStatus>;
+
+  /**
+   * 一致性检查
+   * 检查数据库和文件系统之间的数据一致性
+   * @param agentId - Agent ID
+   * @returns 一致性检查结果
+   */
+  checkConsistency(agentId: string): Promise<ConsistencyCheckResult>;
+
+  /**
+   * 获取指标统计
+   * @returns 指标统计
+   */
+  getMetrics(): Promise<StoreMetrics>;
+
+  /**
+   * 获取分布式锁
+   * 用于多 Worker 场景下保护 Agent 操作
+   * @param agentId - Agent ID
+   * @param timeoutMs - 锁超时时间（毫秒），默认 30000
+   * @returns 锁释放函数
+   */
+  acquireAgentLock(agentId: string, timeoutMs?: number): Promise<LockReleaseFn>;
+
+  /**
+   * 批量 Fork Agent
+   * 优化大量 Fork 场景的性能
+   * @param agentId - 源 Agent ID
+   * @param count - Fork 数量
+   * @returns 新创建的 Agent ID 列表
+   */
+  batchFork(agentId: string, count: number): Promise<string[]>;
+
+  /**
+   * 关闭连接
+   */
+  close(): Promise<void>;
+}

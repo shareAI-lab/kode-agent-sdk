@@ -417,7 +417,7 @@ interface MessageQueryFilter {
 }
 
 const messages = await store.queryMessages({
-  agentId: 'agt:abc123',
+  agentId: 'agt-abc123',
   role: 'assistant',
   contentType: 'tool_use',
   limit: 50
@@ -490,7 +490,7 @@ interface StatsQueryFilter {
   agentId: string;          // 必填：Agent ID
 }
 
-const stats = await store.aggregateStats({ agentId: 'agt:abc123' });
+const stats = await store.aggregateStats({ agentId: 'agt-abc123' });
 
 console.log({
   totalMessages: stats.totalMessages,           // 消息总数
@@ -908,7 +908,7 @@ SELECT pg_reload_conf();
 
 -- 2. 查看执行计划
 EXPLAIN ANALYZE
-SELECT * FROM messages WHERE agent_id = 'agt:abc123' ORDER BY seq;
+SELECT * FROM messages WHERE agent_id = 'agt-abc123' ORDER BY seq;
 
 -- 3. 检查索引使用
 SELECT schemaname, tablename, indexname, idx_scan, idx_tup_read, idx_tup_fetch
@@ -960,7 +960,7 @@ A: 可以，但目前需要手动迁移。未来版本会提供迁移工具。�
 ```typescript
 // 1. 读取 JSONStore 数据
 const jsonStore = new JSONStore('./old-store');
-const agentIds = await jsonStore.list('agt:');
+const agentIds = await jsonStore.list('agt-');
 
 // 2. 逐个迁移到数据库
 const dbStore = new SqliteStore('./agents.db', './new-store');

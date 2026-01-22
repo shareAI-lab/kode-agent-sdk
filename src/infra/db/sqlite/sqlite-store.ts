@@ -1,12 +1,16 @@
 import Database from 'better-sqlite3';
 import {
-  QueryableStore,
+  ExtendedStore,
   SessionFilters,
   MessageFilters,
   ToolCallFilters,
   SessionInfo,
   AgentStats,
-  JSONStore
+  JSONStore,
+  StoreHealthStatus,
+  ConsistencyCheckResult,
+  StoreMetrics,
+  LockReleaseFn
 } from '../../store';
 import {
   Message,
@@ -19,6 +23,8 @@ import {
 } from '../../../core/types';
 import { TodoSnapshot } from '../../../core/todo';
 import { HistoryWindow, CompressionRecord, RecoveredFile, MediaCacheRecord } from '../../store';
+import * as fs from 'fs';
+import * as pathModule from 'path';
 
 /**
  * SqliteStore 实现
@@ -27,14 +33,27 @@ import { HistoryWindow, CompressionRecord, RecoveredFile, MediaCacheRecord } fro
  * - 数据库：AgentInfo, Messages, ToolCallRecords, Snapshots（支持查询）
  * - 文件系统：Events, Todos, History, MediaCache（高频写入）
  */
-export class SqliteStore implements QueryableStore {
+export class SqliteStore implements ExtendedStore {
   private db: Database.Database;
   private fileStore: JSONStore;
+  private dbPath: string;
+
+  // 指标追踪
+  private metrics = {
+    saves: 0,
+    loads: 0,
+    queries: 0,
+    deletes: 0,
+    latencies: [] as number[]
+  };
+
+  // 内存锁（单进程场景）
+  private locks = new Map<string, { resolve: () => void; timeout: NodeJS.Timeout }>();
 
   constructor(dbPath: string, fileStoreBaseDir?: string) {
-    const path = require('path');
+    this.dbPath = dbPath;
     this.db = new Database(dbPath);
-    this.fileStore = new JSONStore(fileStoreBaseDir || path.dirname(dbPath));
+    this.fileStore = new JSONStore(fileStoreBaseDir || pathModule.dirname(dbPath));
     this.initialize();
   }
 
@@ -756,5 +775,290 @@ export class SqliteStore implements QueryableStore {
         return acc;
       }, {} as Record<string, number>)
     };
+  }
+
+  // ========== ExtendedStore 高级功能 ==========
+
+  /**
+   * 健康检查
+   */
+  async healthCheck(): Promise<StoreHealthStatus> {
+    const checkedAt = Date.now();
+    let dbConnected = false;
+    let dbLatencyMs: number | undefined;
+    let fsWritable = false;
+
+    // 检查数据库连接
+    try {
+      const start = Date.now();
+      this.db.prepare('SELECT 1').get();
+      dbConnected = true;
+      dbLatencyMs = Date.now() - start;
+    } catch (error) {
+      dbConnected = false;
+    }
+
+    // 检查文件系统
+    try {
+      const baseDir = (this.fileStore as any).baseDir;
+      // 确保目录存在
+      if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+      }
+      const testFile = pathModule.join(baseDir, '.health-check');
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+      fsWritable = true;
+    } catch (error) {
+      fsWritable = false;
+    }
+
+    return {
+      healthy: dbConnected && fsWritable,
+      database: {
+        connected: dbConnected,
+        latencyMs: dbLatencyMs
+      },
+      fileSystem: {
+        writable: fsWritable
+      },
+      checkedAt
+    };
+  }
+
+  /**
+   * 一致性检查
+   */
+  async checkConsistency(agentId: string): Promise<ConsistencyCheckResult> {
+    const issues: string[] = [];
+    const checkedAt = Date.now();
+
+    // 检查 Agent 是否存在于数据库
+    const dbExists = await this.exists(agentId);
+    if (!dbExists) {
+      issues.push(`Agent ${agentId} 不存在于数据库中`);
+      return { consistent: false, issues, checkedAt };
+    }
+
+    // 检查消息数量一致性
+    const info = await this.loadInfo(agentId);
+    const messages = await this.loadMessages(agentId);
+    if (info && info.messageCount !== messages.length) {
+      issues.push(`消息数量不一致: info.messageCount=${info.messageCount}, 实际消息数=${messages.length}`);
+    }
+
+    // 检查工具调用记录
+    const toolCalls = await this.loadToolCallRecords(agentId);
+    for (const call of toolCalls) {
+      if (!call.id || !call.name) {
+        issues.push(`工具调用记录缺少必要字段: ${JSON.stringify(call)}`);
+      }
+    }
+
+    return {
+      consistent: issues.length === 0,
+      issues,
+      checkedAt
+    };
+  }
+
+  /**
+   * 获取指标统计
+   */
+  async getMetrics(): Promise<StoreMetrics> {
+    // 获取存储统计
+    const agentCount = this.db.prepare('SELECT COUNT(*) as count FROM agents').get() as { count: number };
+    const messageCount = this.db.prepare('SELECT COUNT(*) as count FROM messages').get() as { count: number };
+    const toolCallCount = this.db.prepare('SELECT COUNT(*) as count FROM tool_calls').get() as { count: number };
+
+    // 获取数据库文件大小
+    let dbSizeBytes: number | undefined;
+    try {
+      const stats = fs.statSync(this.dbPath);
+      dbSizeBytes = stats.size;
+    } catch {
+      // 忽略
+    }
+
+    // 计算性能指标
+    const latencies = this.metrics.latencies;
+    const avgLatencyMs = latencies.length > 0
+      ? latencies.reduce((a, b) => a + b, 0) / latencies.length
+      : 0;
+    const maxLatencyMs = latencies.length > 0 ? Math.max(...latencies) : 0;
+    const minLatencyMs = latencies.length > 0 ? Math.min(...latencies) : 0;
+
+    return {
+      operations: {
+        saves: this.metrics.saves,
+        loads: this.metrics.loads,
+        queries: this.metrics.queries,
+        deletes: this.metrics.deletes
+      },
+      performance: {
+        avgLatencyMs,
+        maxLatencyMs,
+        minLatencyMs
+      },
+      storage: {
+        totalAgents: agentCount.count,
+        totalMessages: messageCount.count,
+        totalToolCalls: toolCallCount.count,
+        dbSizeBytes
+      },
+      collectedAt: Date.now()
+    };
+  }
+
+  /**
+   * 获取分布式锁
+   * SQLite 使用内存锁（仅单进程有效）
+   * 注意：对于多进程场景，建议使用 PostgreSQL
+   */
+  async acquireAgentLock(agentId: string, timeoutMs: number = 30000): Promise<LockReleaseFn> {
+    // 检查是否已有锁
+    if (this.locks.has(agentId)) {
+      throw new Error(`无法获取 Agent ${agentId} 的锁，已被当前进程占用`);
+    }
+
+    // 创建锁
+    let resolveRelease: () => void;
+    const lockPromise = new Promise<void>(resolve => {
+      resolveRelease = resolve;
+    });
+
+    const timeoutId = setTimeout(() => {
+      this.locks.delete(agentId);
+      resolveRelease!();
+    }, timeoutMs);
+
+    this.locks.set(agentId, { resolve: resolveRelease!, timeout: timeoutId });
+
+    // 返回释放函数
+    return async () => {
+      const lock = this.locks.get(agentId);
+      if (lock) {
+        clearTimeout(lock.timeout);
+        this.locks.delete(agentId);
+        lock.resolve();
+      }
+    };
+  }
+
+  /**
+   * 批量 Fork Agent
+   */
+  async batchFork(agentId: string, count: number): Promise<string[]> {
+    // 加载源 Agent 数据
+    const sourceInfo = await this.loadInfo(agentId);
+    if (!sourceInfo) {
+      throw new Error(`源 Agent ${agentId} 不存在`);
+    }
+
+    const sourceMessages = await this.loadMessages(agentId);
+    const sourceToolCalls = await this.loadToolCallRecords(agentId);
+
+    const newAgentIds: string[] = [];
+
+    // 使用事务批量创建
+    const transaction = this.db.transaction(() => {
+      for (let i = 0; i < count; i++) {
+        const newAgentId = this.generateAgentId();
+        newAgentIds.push(newAgentId);
+
+        // 创建新 Agent Info
+        const newInfo = {
+          ...sourceInfo,
+          agentId: newAgentId,
+          createdAt: new Date().toISOString(),
+          lineage: [...sourceInfo.lineage, agentId]
+        };
+
+        // 插入 Agent Info
+        this.db.prepare(`
+          INSERT INTO agents (
+            agent_id, template_id, created_at, config_version,
+            lineage, message_count, last_sfp_index, last_bookmark,
+            breakpoint, metadata
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          newInfo.agentId,
+          newInfo.templateId,
+          newInfo.createdAt,
+          newInfo.configVersion,
+          JSON.stringify(newInfo.lineage),
+          newInfo.messageCount,
+          newInfo.lastSfpIndex,
+          newInfo.lastBookmark ? JSON.stringify(newInfo.lastBookmark) : null,
+          newInfo.breakpoint || null,
+          JSON.stringify(newInfo.metadata)
+        );
+
+        // 复制消息
+        for (let index = 0; index < sourceMessages.length; index++) {
+          const msg = sourceMessages[index];
+          this.db.prepare(`
+            INSERT INTO messages (
+              id, agent_id, role, content, seq, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            this.generateMessageId(),
+            newAgentId,
+            msg.role,
+            JSON.stringify(msg.content),
+            index,
+            msg.metadata ? JSON.stringify(msg.metadata) : null,
+            Date.now()
+          );
+        }
+
+        // 复制工具调用记录
+        for (const record of sourceToolCalls) {
+          this.db.prepare(`
+            INSERT INTO tool_calls (
+              id, agent_id, name, input, state, approval,
+              result, error, is_error,
+              started_at, completed_at, duration_ms,
+              created_at, updated_at, audit_trail
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            `${record.id}_fork_${i}`,
+            newAgentId,
+            record.name,
+            JSON.stringify(record.input),
+            record.state,
+            JSON.stringify(record.approval),
+            record.result ? JSON.stringify(record.result) : null,
+            record.error || null,
+            record.isError ? 1 : 0,
+            record.startedAt || null,
+            record.completedAt || null,
+            record.durationMs || null,
+            record.createdAt,
+            record.updatedAt,
+            JSON.stringify(record.auditTrail)
+          );
+        }
+      }
+    });
+
+    transaction();
+    return newAgentIds;
+  }
+
+  /**
+   * 关闭数据库连接
+   */
+  async close(): Promise<void> {
+    this.db.close();
+  }
+
+  /**
+   * 生成 Agent ID
+   */
+  private generateAgentId(): string {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substring(2, 18);
+    return `agt-${timestamp}${random}`;
   }
 }

@@ -40,7 +40,7 @@ runner
 
 runner.test('saveInfo + loadInfo - 数据一致性', async () => {
   const agentInfo: AgentInfo = {
-    agentId: 'agt:test001',
+    agentId: 'agt-test001',
     templateId: 'test-template',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -67,7 +67,7 @@ runner.test('saveInfo + loadInfo - 数据一致性', async () => {
 
 runner.test('saveInfo - breakpoint 字段处理', async () => {
   const agentInfo: AgentInfo = {
-    agentId: 'agt:test002',
+    agentId: 'agt-test002',
     templateId: 'test-template',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -87,7 +87,7 @@ runner.test('saveInfo - breakpoint 字段处理', async () => {
 
 runner.test('saveInfo - lastBookmark 字段处理', async () => {
   const agentInfo: AgentInfo = {
-    agentId: 'agt:test003',
+    agentId: 'agt-test003',
     templateId: 'test-template',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -108,7 +108,7 @@ runner.test('saveInfo - lastBookmark 字段处理', async () => {
 // ========== 5.1.2 测试基础 CRUD - Messages ==========
 
 runner.test('saveMessages + loadMessages - seq 顺序验证', async () => {
-  const agentId = 'agt:test004';
+  const agentId = 'agt-test004';
 
   // 先创建 agent
   await store.saveInfo(agentId, {
@@ -148,7 +148,7 @@ runner.test('saveMessages + loadMessages - seq 顺序验证', async () => {
 });
 
 runner.test('saveMessages - message_count 自动更新', async () => {
-  const agentId = 'agt:test005';
+  const agentId = 'agt-test005';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -175,7 +175,7 @@ runner.test('saveMessages - message_count 自动更新', async () => {
 // ========== 5.1.3 测试基础 CRUD - ToolCallRecords ==========
 
 runner.test('saveToolCallRecords + loadToolCallRecords - JSON 字段验证', async () => {
-  const agentId = 'agt:test006';
+  const agentId = 'agt-test006';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -218,7 +218,7 @@ runner.test('saveToolCallRecords + loadToolCallRecords - JSON 字段验证', asy
 });
 
 runner.test('saveToolCallRecords - boolean 转 INTEGER', async () => {
-  const agentId = 'agt:test007';
+  const agentId = 'agt-test007';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -256,7 +256,7 @@ runner.test('saveToolCallRecords - boolean 转 INTEGER', async () => {
 // ========== 5.1.4 测试基础 CRUD - Snapshots ==========
 
 runner.test('saveSnapshot + loadSnapshot + listSnapshots', async () => {
-  const agentId = 'agt:test008';
+  const agentId = 'agt-test008';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -298,8 +298,8 @@ runner.test('saveSnapshot + loadSnapshot + listSnapshots', async () => {
 runner.test('querySessions - 基本查询', async () => {
   // 创建多个 agents
   for (let i = 0; i < 3; i++) {
-    await store.saveInfo(`agt:query${i}`, {
-      agentId: `agt:query${i}`,
+    await store.saveInfo(`agt-query${i}`, {
+      agentId: `agt-query${i}`,
       templateId: 'test-template',
       createdAt: new Date(Date.now() - i * 1000).toISOString(),
       configVersion: 'v2.7.0',
@@ -315,8 +315,8 @@ runner.test('querySessions - 基本查询', async () => {
 });
 
 runner.test('querySessions - 按 templateId 过滤', async () => {
-  await store.saveInfo('agt:template1', {
-    agentId: 'agt:template1',
+  await store.saveInfo('agt-template1', {
+    agentId: 'agt-template1',
     templateId: 'template-A',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -328,7 +328,7 @@ runner.test('querySessions - 按 templateId 过滤', async () => {
 
   const sessions = await store.querySessions({ templateId: 'template-A' });
   expect.toBeGreaterThanOrEqual(sessions.length, 1);
-  expect.toEqual(sessions.find(s => s.agentId === 'agt:template1')?.templateId, 'template-A');
+  expect.toEqual(sessions.find(s => s.agentId === 'agt-template1')?.templateId, 'template-A');
 });
 
 runner.test('querySessions - 分页查询', async () => {
@@ -340,7 +340,7 @@ runner.test('querySessions - 分页查询', async () => {
 });
 
 runner.test('queryMessages - 按 agentId 过滤', async () => {
-  const agentId = 'agt:msg001';
+  const agentId = 'agt-msg001';
   await store.saveInfo(agentId, {
     agentId,
     templateId: 'test-template',
@@ -361,7 +361,7 @@ runner.test('queryMessages - 按 agentId 过滤', async () => {
 });
 
 runner.test('queryMessages - 按 role 过滤', async () => {
-  const agentId = 'agt:msg002';
+  const agentId = 'agt-msg002';
   await store.saveInfo(agentId, {
     agentId,
     templateId: 'test-template',
@@ -384,7 +384,7 @@ runner.test('queryMessages - 按 role 过滤', async () => {
 });
 
 runner.test('queryToolCalls - 按 toolName 过滤', async () => {
-  const agentId = 'agt:tool001';
+  const agentId = 'agt-tool001';
   await store.saveInfo(agentId, {
     agentId,
     templateId: 'test-template',
@@ -427,7 +427,7 @@ runner.test('queryToolCalls - 按 toolName 过滤', async () => {
 // ========== 5.1.6 测试聚合功能 ==========
 
 runner.test('aggregateStats - 统计准确性', async () => {
-  const agentId = 'agt:stats001';
+  const agentId = 'agt-stats001';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -481,7 +481,7 @@ runner.test('aggregateStats - 统计准确性', async () => {
 // ========== 5.1.7 测试事务一致性 ==========
 
 runner.test('saveMessages - 事务回滚测试', async () => {
-  const agentId = 'agt:transaction001';
+  const agentId = 'agt-transaction001';
 
   await store.saveInfo(agentId, {
     agentId,
@@ -513,7 +513,7 @@ runner.test('saveMessages - 事务回滚测试', async () => {
 // ========== 5.1.8 测试生命周期方法 ==========
 
 runner.test('exists - Agent 存在性检查', async () => {
-  const agentId = 'agt:exists001';
+  const agentId = 'agt-exists001';
 
   const existsBefore = await store.exists(agentId);
   expect.toEqual(existsBefore, false);
@@ -534,7 +534,7 @@ runner.test('exists - Agent 存在性检查', async () => {
 });
 
 runner.test('delete - CASCADE 删除', async () => {
-  const agentId = 'agt:delete001';
+  const agentId = 'agt-delete001';
 
   // 创建完整数据
   await store.saveInfo(agentId, {
@@ -580,8 +580,8 @@ runner.test('delete - CASCADE 删除', async () => {
 });
 
 runner.test('list - Agent 列表查询', async () => {
-  await store.saveInfo('agt:list001', {
-    agentId: 'agt:list001',
+  await store.saveInfo('agt-list001', {
+    agentId: 'agt-list001',
     templateId: 'test-template',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -591,8 +591,8 @@ runner.test('list - Agent 列表查询', async () => {
     metadata: {}
   });
 
-  await store.saveInfo('agt:list002', {
-    agentId: 'agt:list002',
+  await store.saveInfo('agt-list002', {
+    agentId: 'agt-list002',
     templateId: 'test-template',
     createdAt: new Date().toISOString(),
     configVersion: 'v2.7.0',
@@ -605,8 +605,130 @@ runner.test('list - Agent 列表查询', async () => {
   const allAgents = await store.list();
   expect.toBeGreaterThanOrEqual(allAgents.length, 2);
 
-  const prefixedAgents = await store.list('agt:list');
+  const prefixedAgents = await store.list('agt-list');
   expect.toBeGreaterThanOrEqual(prefixedAgents.length, 2);
+});
+
+// ========== 5.1.9 测试高级功能 (ExtendedStore) ==========
+
+runner.test('healthCheck - 健康检查', async () => {
+  const health = await store.healthCheck();
+
+  expect.toBeTruthy(health.healthy, '应该返回健康状态');
+  expect.toEqual(health.database.connected, true, '数据库应该已连接');
+  expect.toBeTruthy(typeof health.database.latencyMs === 'number', '应该返回延迟时间');
+  expect.toEqual(health.fileSystem.writable, true, '文件系统应该可写');
+  expect.toBeTruthy(health.checkedAt > 0, '应该返回检查时间');
+});
+
+runner.test('checkConsistency - 一致性检查', async () => {
+  const agentId = 'agt-consistency001';
+
+  // 创建 Agent
+  await store.saveInfo(agentId, {
+    agentId,
+    templateId: 'test-template',
+    createdAt: new Date().toISOString(),
+    configVersion: 'v2.7.0',
+    lineage: [],
+    messageCount: 0,
+    lastSfpIndex: -1,
+    metadata: {}
+  });
+
+  const result = await store.checkConsistency(agentId);
+
+  expect.toEqual(result.consistent, true, '新创建的 Agent 应该一致');
+  expect.toHaveLength(result.issues, 0);
+  expect.toBeTruthy(result.checkedAt > 0);
+});
+
+runner.test('checkConsistency - 检测不存在的 Agent', async () => {
+  const result = await store.checkConsistency('agt-nonexistent');
+
+  expect.toEqual(result.consistent, false);
+  expect.toBeGreaterThanOrEqual(result.issues.length, 1);
+});
+
+runner.test('getMetrics - 获取指标统计', async () => {
+  const metrics = await store.getMetrics();
+
+  expect.toBeTruthy(typeof metrics.operations.saves === 'number');
+  expect.toBeTruthy(typeof metrics.operations.loads === 'number');
+  expect.toBeTruthy(typeof metrics.storage.totalAgents === 'number');
+  expect.toBeTruthy(typeof metrics.storage.totalMessages === 'number');
+  expect.toBeTruthy(metrics.collectedAt > 0);
+});
+
+runner.test('acquireAgentLock - 获取和释放锁', async () => {
+  const agentId = 'agt-lock001';
+
+  // 获取锁
+  const releaseLock = await store.acquireAgentLock(agentId, 5000);
+  expect.toBeTruthy(typeof releaseLock === 'function', '应该返回释放函数');
+
+  // 释放锁
+  await releaseLock();
+});
+
+runner.test('acquireAgentLock - 重复获取锁应失败', async () => {
+  const agentId = 'agt-lock002';
+
+  // 获取第一个锁
+  const releaseLock1 = await store.acquireAgentLock(agentId, 5000);
+
+  // 尝试获取第二个锁应该失败
+  let errorThrown = false;
+  try {
+    await store.acquireAgentLock(agentId, 1000);
+  } catch (error) {
+    errorThrown = true;
+  }
+
+  expect.toEqual(errorThrown, true, '重复获取锁应该抛出错误');
+
+  // 释放第一个锁
+  await releaseLock1();
+});
+
+runner.test('batchFork - 批量 Fork Agent', async () => {
+  const sourceAgentId = 'agt-fork-source';
+
+  // 创建源 Agent
+  await store.saveInfo(sourceAgentId, {
+    agentId: sourceAgentId,
+    templateId: 'test-template',
+    createdAt: new Date().toISOString(),
+    configVersion: 'v2.7.0',
+    lineage: [],
+    messageCount: 0,
+    lastSfpIndex: -1,
+    metadata: { source: true }
+  });
+
+  await store.saveMessages(sourceAgentId, [
+    { role: 'user', content: [{ type: 'text', text: 'Fork test' }] }
+  ]);
+
+  // 批量 Fork
+  const newAgentIds = await store.batchFork(sourceAgentId, 3);
+
+  expect.toHaveLength(newAgentIds, 3);
+
+  // 验证每个新 Agent
+  for (const newAgentId of newAgentIds) {
+    expect.toBeTruthy(newAgentId.startsWith('agt-'), 'ID 应该以 agt- 开头');
+
+    const exists = await store.exists(newAgentId);
+    expect.toEqual(exists, true, '新 Agent 应该存在');
+
+    const info = await store.loadInfo(newAgentId);
+    expect.toBeTruthy(info, '应该能加载 Info');
+    expect.toBeTruthy(info!.lineage.includes(sourceAgentId), 'lineage 应该包含源 Agent');
+
+    const messages = await store.loadMessages(newAgentId);
+    expect.toHaveLength(messages, 1);
+  }
 });
 
 export async function run() {

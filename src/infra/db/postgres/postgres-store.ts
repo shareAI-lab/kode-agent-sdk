@@ -1,12 +1,17 @@
 import { Pool, PoolClient } from 'pg';
 import {
-  QueryableStore,
+  ExtendedStore,
   SessionFilters,
   MessageFilters,
   ToolCallFilters,
   SessionInfo,
   AgentStats,
-  JSONStore
+  JSONStore,
+  PostgresConfig,
+  StoreHealthStatus,
+  ConsistencyCheckResult,
+  StoreMetrics,
+  LockReleaseFn
 } from '../../store';
 import {
   Message,
@@ -32,22 +37,50 @@ import { HistoryWindow, CompressionRecord, RecoveredFile, MediaCacheRecord } fro
  * - 连接池管理
  * - 事务支持
  */
-export class PostgresStore implements QueryableStore {
+export class PostgresStore implements ExtendedStore {
   private pool: Pool;
   private fileStore: JSONStore;
   private initPromise: Promise<void>;
-  private initError: Error | null = null;
 
-  constructor(connectionConfig: any, fileStoreBaseDir: string) {
-    this.pool = new Pool(connectionConfig);
-    this.fileStore = new JSONStore(fileStoreBaseDir);
-    this.initPromise = this.initialize().catch(err => {
-      this.initError = err;
-      throw err;
+  // 指标追踪
+  private metrics = {
+    saves: 0,
+    loads: 0,
+    queries: 0,
+    deletes: 0,
+    latencies: [] as number[]
+  };
+
+  constructor(config: PostgresConfig, fileStoreBaseDir: string) {
+    // 合并默认配置
+    const poolConfig = {
+      ...config,
+      port: config.port ?? 5432,
+      max: config.max ?? 10,
+      idleTimeoutMillis: config.idleTimeoutMillis ?? 30000,
+      connectionTimeoutMillis: config.connectionTimeoutMillis ?? 5000,
+    };
+
+    this.pool = new Pool(poolConfig);
+
+    // 监听连接池错误，防止未处理的异常
+    this.pool.on('error', (err) => {
+      console.error('[PostgresStore] Unexpected pool error:', err.message);
     });
+
+    this.fileStore = new JSONStore(fileStoreBaseDir);
+    this.initPromise = this.initialize();
   }
 
   // ========== 数据库初始化 ==========
+
+  /**
+   * 确保数据库已初始化
+   * 在所有公开的数据库操作方法开头调用
+   */
+  private async ensureInitialized(): Promise<void> {
+    await this.initPromise;
+  }
 
   private async initialize(): Promise<void> {
     await this.createTables();
@@ -169,6 +202,7 @@ export class PostgresStore implements QueryableStore {
   // ========== 运行时状态管理（数据库） ==========
 
   async saveMessages(agentId: string, messages: Message[]): Promise<void> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -213,6 +247,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async loadMessages(agentId: string): Promise<Message[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -238,6 +273,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async saveToolCallRecords(agentId: string, records: ToolCallRecord[]): Promise<void> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -284,6 +320,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async loadToolCallRecords(agentId: string): Promise<ToolCallRecord[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -375,6 +412,7 @@ export class PostgresStore implements QueryableStore {
   // ========== 快照管理（数据库） ==========
 
   async saveSnapshot(agentId: string, snapshot: Snapshot): Promise<void> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       await client.query(
@@ -405,6 +443,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async loadSnapshot(agentId: string, snapshotId: string): Promise<Snapshot | undefined> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -434,6 +473,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async listSnapshots(agentId: string): Promise<Snapshot[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -461,6 +501,7 @@ export class PostgresStore implements QueryableStore {
   // ========== 元数据管理（数据库） ==========
 
   async saveInfo(agentId: string, info: AgentInfo): Promise<void> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       await client.query(
@@ -499,6 +540,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async loadInfo(agentId: string): Promise<AgentInfo | undefined> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -541,6 +583,7 @@ export class PostgresStore implements QueryableStore {
   // ========== 生命周期管理 ==========
 
   async exists(agentId: string): Promise<boolean> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       const result = await client.query(
@@ -554,6 +597,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async delete(agentId: string): Promise<void> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       // 删除数据库记录（级联删除）
@@ -566,6 +610,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async list(prefix?: string): Promise<string[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       let query = 'SELECT agent_id FROM agents ORDER BY created_at DESC';
@@ -586,6 +631,7 @@ export class PostgresStore implements QueryableStore {
   // ========== QueryableStore 接口实现 ==========
 
   async querySessions(filters: SessionFilters): Promise<SessionInfo[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       let sql = `
@@ -649,6 +695,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async queryMessages(filters: MessageFilters): Promise<Message[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       let sql = 'SELECT role, content, metadata FROM messages WHERE 1=1';
@@ -700,6 +747,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async queryToolCalls(filters: ToolCallFilters): Promise<ToolCallRecord[]> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       let sql = `
@@ -774,6 +822,7 @@ export class PostgresStore implements QueryableStore {
   }
 
   async aggregateStats(agentId: string): Promise<AgentStats> {
+    await this.ensureInitialized();
     const client = await this.pool.connect();
     try {
       // Total messages
@@ -837,6 +886,354 @@ export class PostgresStore implements QueryableStore {
    * 关闭连接池
    */
   async close(): Promise<void> {
+    await this.ensureInitialized();
     await this.pool.end();
+  }
+
+  // ========== ExtendedStore 高级功能 ==========
+
+  /**
+   * 健康检查
+   */
+  async healthCheck(): Promise<StoreHealthStatus> {
+    const checkedAt = Date.now();
+    let dbConnected = false;
+    let dbLatencyMs: number | undefined;
+    let fsWritable = false;
+
+    // 检查数据库连接
+    try {
+      const start = Date.now();
+      const client = await this.pool.connect();
+      try {
+        await client.query('SELECT 1');
+        dbConnected = true;
+        dbLatencyMs = Date.now() - start;
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      dbConnected = false;
+    }
+
+    // 检查文件系统
+    try {
+      const fs = await import('fs');
+      const path = await import('path');
+      const baseDir = (this.fileStore as any).baseDir;
+      // 确保目录存在
+      if (!fs.existsSync(baseDir)) {
+        fs.mkdirSync(baseDir, { recursive: true });
+      }
+      const testFile = path.join(baseDir, '.health-check');
+      fs.writeFileSync(testFile, 'ok');
+      fs.unlinkSync(testFile);
+      fsWritable = true;
+    } catch (error) {
+      fsWritable = false;
+    }
+
+    return {
+      healthy: dbConnected && fsWritable,
+      database: {
+        connected: dbConnected,
+        latencyMs: dbLatencyMs
+      },
+      fileSystem: {
+        writable: fsWritable
+      },
+      checkedAt
+    };
+  }
+
+  /**
+   * 一致性检查
+   * 检查数据库和文件系统之间的数据一致性
+   */
+  async checkConsistency(agentId: string): Promise<ConsistencyCheckResult> {
+    await this.ensureInitialized();
+    const issues: string[] = [];
+    const checkedAt = Date.now();
+
+    // 检查 Agent 是否存在于数据库
+    const dbExists = await this.exists(agentId);
+    if (!dbExists) {
+      issues.push(`Agent ${agentId} 不存在于数据库中`);
+      return { consistent: false, issues, checkedAt };
+    }
+
+    // 检查文件系统中的数据
+    const fs = await import('fs').then(m => m.promises);
+    const path = await import('path');
+    const agentDir = path.join((this.fileStore as any).baseDir, agentId);
+
+    try {
+      await fs.access(agentDir);
+    } catch {
+      // 文件系统目录不存在不一定是问题（可能还没有事件/todos等）
+    }
+
+    // 检查消息数量一致性
+    const info = await this.loadInfo(agentId);
+    const messages = await this.loadMessages(agentId);
+    if (info && info.messageCount !== messages.length) {
+      issues.push(`消息数量不一致: info.messageCount=${info.messageCount}, 实际消息数=${messages.length}`);
+    }
+
+    // 检查工具调用记录
+    const toolCalls = await this.loadToolCallRecords(agentId);
+    for (const call of toolCalls) {
+      if (!call.id || !call.name) {
+        issues.push(`工具调用记录缺少必要字段: ${JSON.stringify(call)}`);
+      }
+    }
+
+    return {
+      consistent: issues.length === 0,
+      issues,
+      checkedAt
+    };
+  }
+
+  /**
+   * 获取指标统计
+   */
+  async getMetrics(): Promise<StoreMetrics> {
+    await this.ensureInitialized();
+    const client = await this.pool.connect();
+
+    try {
+      // 获取存储统计
+      const agentCount = await client.query('SELECT COUNT(*) as count FROM agents');
+      const messageCount = await client.query('SELECT COUNT(*) as count FROM messages');
+      const toolCallCount = await client.query('SELECT COUNT(*) as count FROM tool_calls');
+
+      // 尝试获取数据库大小（PostgreSQL 特有）
+      let dbSizeBytes: number | undefined;
+      try {
+        const sizeResult = await client.query(
+          "SELECT pg_database_size(current_database()) as size"
+        );
+        dbSizeBytes = parseInt(sizeResult.rows[0].size);
+      } catch {
+        // 忽略，某些环境可能没有权限
+      }
+
+      // 计算性能指标
+      const latencies = this.metrics.latencies;
+      const avgLatencyMs = latencies.length > 0
+        ? latencies.reduce((a, b) => a + b, 0) / latencies.length
+        : 0;
+      const maxLatencyMs = latencies.length > 0 ? Math.max(...latencies) : 0;
+      const minLatencyMs = latencies.length > 0 ? Math.min(...latencies) : 0;
+
+      return {
+        operations: {
+          saves: this.metrics.saves,
+          loads: this.metrics.loads,
+          queries: this.metrics.queries,
+          deletes: this.metrics.deletes
+        },
+        performance: {
+          avgLatencyMs,
+          maxLatencyMs,
+          minLatencyMs
+        },
+        storage: {
+          totalAgents: parseInt(agentCount.rows[0].count),
+          totalMessages: parseInt(messageCount.rows[0].count),
+          totalToolCalls: parseInt(toolCallCount.rows[0].count),
+          dbSizeBytes
+        },
+        collectedAt: Date.now()
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 获取分布式锁
+   * 使用 PostgreSQL Advisory Lock
+   */
+  async acquireAgentLock(agentId: string, timeoutMs: number = 30000): Promise<LockReleaseFn> {
+    await this.ensureInitialized();
+
+    // 将 agentId 转换为数字用于 advisory lock
+    const lockKey = this.hashStringToInt(agentId);
+
+    const client = await this.pool.connect();
+
+    try {
+      // 尝试获取锁（带超时）
+      const result = await client.query(
+        'SELECT pg_try_advisory_lock($1) as acquired',
+        [lockKey]
+      );
+
+      if (!result.rows[0].acquired) {
+        client.release();
+        throw new Error(`无法获取 Agent ${agentId} 的锁，可能被其他进程占用`);
+      }
+
+      // 设置超时自动释放
+      const timeoutId = setTimeout(async () => {
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [lockKey]);
+          client.release();
+        } catch {
+          // 忽略释放错误
+        }
+      }, timeoutMs);
+
+      // 返回释放函数
+      return async () => {
+        clearTimeout(timeoutId);
+        try {
+          await client.query('SELECT pg_advisory_unlock($1)', [lockKey]);
+        } finally {
+          client.release();
+        }
+      };
+    } catch (error) {
+      client.release();
+      throw error;
+    }
+  }
+
+  /**
+   * 批量 Fork Agent
+   */
+  async batchFork(agentId: string, count: number): Promise<string[]> {
+    await this.ensureInitialized();
+
+    // 加载源 Agent 数据
+    const sourceInfo = await this.loadInfo(agentId);
+    if (!sourceInfo) {
+      throw new Error(`源 Agent ${agentId} 不存在`);
+    }
+
+    const sourceMessages = await this.loadMessages(agentId);
+    const sourceToolCalls = await this.loadToolCallRecords(agentId);
+
+    const client = await this.pool.connect();
+    const newAgentIds: string[] = [];
+
+    try {
+      await client.query('BEGIN');
+
+      for (let i = 0; i < count; i++) {
+        // 生成新的 Agent ID
+        const newAgentId = this.generateAgentId();
+        newAgentIds.push(newAgentId);
+
+        // 创建新 Agent Info
+        const newInfo = {
+          ...sourceInfo,
+          agentId: newAgentId,
+          createdAt: new Date().toISOString(),
+          lineage: [...sourceInfo.lineage, agentId]
+        };
+
+        // 插入 Agent Info
+        await client.query(
+          `INSERT INTO agents (
+            agent_id, template_id, created_at, config_version,
+            lineage, message_count, last_sfp_index, last_bookmark,
+            breakpoint, metadata
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [
+            newInfo.agentId,
+            newInfo.templateId,
+            newInfo.createdAt,
+            newInfo.configVersion,
+            JSON.stringify(newInfo.lineage),
+            newInfo.messageCount,
+            newInfo.lastSfpIndex,
+            newInfo.lastBookmark ? JSON.stringify(newInfo.lastBookmark) : null,
+            newInfo.breakpoint || null,
+            JSON.stringify(newInfo.metadata)
+          ]
+        );
+
+        // 复制消息
+        for (let index = 0; index < sourceMessages.length; index++) {
+          const msg = sourceMessages[index];
+          await client.query(
+            `INSERT INTO messages (
+              id, agent_id, role, content, seq, metadata, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              this.generateMessageId(),
+              newAgentId,
+              msg.role,
+              JSON.stringify(msg.content),
+              index,
+              msg.metadata ? JSON.stringify(msg.metadata) : null,
+              Date.now()
+            ]
+          );
+        }
+
+        // 复制工具调用记录
+        for (const record of sourceToolCalls) {
+          await client.query(
+            `INSERT INTO tool_calls (
+              id, agent_id, name, input, state, approval,
+              result, error, is_error,
+              started_at, completed_at, duration_ms,
+              created_at, updated_at, audit_trail
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+            [
+              `${record.id}_fork_${i}`,
+              newAgentId,
+              record.name,
+              JSON.stringify(record.input),
+              record.state,
+              JSON.stringify(record.approval),
+              record.result ? JSON.stringify(record.result) : null,
+              record.error || null,
+              record.isError,
+              record.startedAt || null,
+              record.completedAt || null,
+              record.durationMs || null,
+              record.createdAt,
+              record.updatedAt,
+              JSON.stringify(record.auditTrail)
+            ]
+          );
+        }
+      }
+
+      await client.query('COMMIT');
+      return newAgentIds;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * 将字符串哈希为整数（用于 advisory lock）
+   */
+  private hashStringToInt(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash);
+  }
+
+  /**
+   * 生成 Agent ID
+   */
+  private generateAgentId(): string {
+    const timestamp = Date.now().toString(36);
+    const random = Math.random().toString(36).substring(2, 18);
+    return `agt-${timestamp}${random}`;
   }
 }
