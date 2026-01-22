@@ -1,499 +1,284 @@
-# KODE SDK · Event-Driven Agent Runtime
+# KODE SDK
 
-> **就像和资深同事协作**：发消息、批示、打断、分叉、续上 —— 一套最小而够用的 API，驱动长期在线的多 Agent 系统。
+> **Stateful Agent Runtime Kernel** - The engine that powers your AI agents with persistence, recovery, and trajectory exploration.
 
-## Why KODE
+```
+                    +------------------+
+                    |   Your App       |  CLI / Desktop / IDE / Server
+                    +--------+---------+
+                             |
+                    +--------v---------+
+                    |    KODE SDK      |  Agent Runtime Kernel
+                    |  +-----------+   |
+                    |  |  Agent    |   |  Lifecycle + State + Events
+                    |  +-----------+   |
+                    |  |  Store    |   |  Persistence (Pluggable)
+                    |  +-----------+   |
+                    |  |  Sandbox  |   |  Execution Isolation
+                    |  +-----------+   |
+                    +------------------+
+```
 
-- **Event-First**：UI 只订阅 Progress（文本/工具流）；审批与治理走 Control & Monitor 回调，默认不推噪音事件。
-- **长时运行 + 可分叉**：七段断点恢复（READY → POST_TOOL），Safe-Fork-Point 天然存在于工具结果与纯文本处，一键 fork 继续。
-- **同事式协作心智**：Todo 管理、提醒、Tool 手册自动注入，工具并发可限流，默认配置即安全可用。
-- **高性能且可审计**：统一 WAL、零拷贝文本流、工具拒绝必落审计、Monitor 事件覆盖 token 用量、错误与文件变更。
-- **可扩展生态**：原生接入 MCP 工具、Sandbox 驱动、模型 Provider、Store 后端、Scheduler DSL，支持企业级自定义。
+---
 
-## 60 秒上手：跑通第一个“协作收件箱”
+## What is KODE SDK?
+
+KODE SDK is an **Agent Runtime Kernel** - think of it like V8 for JavaScript, but for AI agents. It handles the complex lifecycle management so you can focus on building your agent's capabilities.
+
+**Core Capabilities:**
+- **Crash Recovery**: WAL-protected persistence with 7-stage breakpoint recovery
+- **Fork & Resume**: Explore different agent trajectories from any checkpoint
+- **Event Streams**: Progress/Control/Monitor channels for real-time UI updates
+- **Tool Governance**: Permission system, approval workflows, audit trails
+
+**What KODE SDK is NOT:**
+- Not a cloud platform (you deploy it)
+- Not an HTTP server (you add that layer)
+- Not a multi-tenant SaaS framework (you build that on top)
+
+---
+
+## When to Use KODE SDK
+
+### Perfect Fit (Use directly)
+
+| Scenario | Why It Works |
+|----------|--------------|
+| **CLI Agent Tools** | Single process, local filesystem, zero config |
+| **Desktop Apps** (Electron/Tauri) | Full system access, long-running process |
+| **IDE Plugins** (VSCode/JetBrains) | Single user, workspace integration |
+| **Local Development** | Fast iteration, instant persistence |
+
+### Good Fit (With architecture)
+
+| Scenario | What You Need |
+|----------|---------------|
+| **Self-hosted Server** | Add HTTP layer (Express/Fastify/Hono) |
+| **Small-scale Backend** (<1K users) | Implement PostgresStore, add user isolation |
+| **Kubernetes Deployment** | Implement distributed Store + locks |
+
+### Needs Custom Architecture
+
+| Scenario | Recommended Approach |
+|----------|---------------------|
+| **Large-scale ToC** (10K+ users) | Worker microservice pattern (see [Architecture Guide](./docs/ARCHITECTURE.md)) |
+| **Serverless** (Vercel/Cloudflare) | API layer on serverless + Worker pool for agents |
+| **Multi-tenant SaaS** | Tenant isolation layer + distributed Store |
+
+### Not Designed For
+
+| Scenario | Reason |
+|----------|--------|
+| **Pure browser runtime** | No filesystem, no process execution |
+| **Edge functions only** | Agent loops need long-running processes |
+| **Stateless microservices** | Agents are inherently stateful |
+
+> **Rule of Thumb**: If your agents need to run for more than a few seconds, execute tools, and remember state - KODE SDK is for you. If you just need stateless LLM calls, use the provider APIs directly.
+
+---
+
+## 60-Second Quick Start
 
 ```bash
-npm install @shareai-lab/kode-sdk
-export ANTHROPIC_API_KEY=sk-...        # 或 ANTHROPIC_API_TOKEN
-export ANTHROPIC_BASE_URL=https://...   # 可选，默认为官方 API
-export ANTHROPIC_MODEL_ID=claude-sonnet-4.5-20250929  # 可选
+npm install @anthropic/kode-sdk
 
-npm run example:agent-inbox
+# Set your API key
+export ANTHROPIC_API_KEY=sk-...
+
+# Run the example
+npx ts-node examples/getting-started.ts
 ```
-
-输出中你会看到：
-
-- Progress 渠道实时流式文本 / 工具生命周期事件
-- Control 渠道的审批请求（示例中默认拒绝 `bash_run`）
-- Monitor 渠道的工具审计日志（耗时、审批结果、错误）
-
-想自定义行为？修改 `examples/01-agent-inbox.ts` 内的模板、工具与事件订阅即可。
-
-## 示例游乐场
-
-| 示例 | 用例 | 涵盖能力 |
-| --- | --- | --- |
-| `npm run example:getting-started` | 最小对话循环 | Progress 流订阅、Anthropic 模型直连 |
-| `npm run example:agent-inbox` | 事件驱动收件箱 | Todo 管理、工具并发、Monitor 审计 |
-| `npm run example:approval` | 工具审批工作流 | Control 回调、Hook 策略、自动拒绝/放行 |
-| `npm run example:room` | 多 Agent 协作 | AgentPool、Room 消息、Safe Fork、Lineage |
-| `npm run example:scheduler` | 长时运行 & 提醒 | Scheduler 步数触发、系统提醒、FilePool 监控 |
-| `npm run example:nextjs` | API + SSE | Resume-or-create、Progress 流推送（无需安装 Next） |
-
-每个示例都位于 `examples/` 下，对应 README 中的学习路径，展示事件驱动、审批、安全、调度、协作等核心能力的组合方式。
-
-## 构建属于你的协作型 Agent
-
-1. **理解三通道心智**：详见 [`docs/events.md`](./docs/events.md)。
-2. **跟着 Quickstart 实战**：[`docs/quickstart.md`](./docs/quickstart.md) 从 “依赖注入 → Resume → SSE” 手把手搭建服务。
-3. **扩展用例**：[`docs/playbooks.md`](./docs/playbooks.md) 涵盖审批治理、多 Agent 小组、调度提醒等典型场景。
-4. **查阅 API**：[`docs/api.md`](./docs/api.md) 枚举 `Agent`、`EventBus`、`ToolRegistry` 等核心类型与事件。
-5. **深挖能力**：Todo、ContextManager、Scheduler、Sandbox、Hook、Tool 定义详见 `docs/` 目录。
-
-## 基础设计一图流
-
-```
-Client/UI ── subscribe(['progress']) ──┐
-Approval service ── Control 回调 ─────┼▶ EventBus（三通道）
-Observability ── Monitor 事件 ────────┘
-
-             │
-             ▼
-   MessageQueue → ContextManager → ToolRunner
-             │             │             │
-             ▼             ▼             ▼
-        Store (WAL)    FilePool      PermissionManager
-```
-
-## Provider Adapter Pattern
-
-KODE SDK uses **Anthropic-style messages as the internal canonical format**. All model providers are implemented as adapters that convert to/from this internal format, enabling seamless switching between providers while maintaining a consistent message structure.
-
-### Internal Message Format
 
 ```typescript
-interface Message {
-  role: 'user' | 'assistant' | 'system';
-  content: ContentBlock[];
-  metadata?: {
-    content_blocks?: ContentBlock[];
-    transport?: 'provider' | 'text' | 'omit';
-  };
-}
+import { Agent, AnthropicProvider, LocalSandbox } from '@anthropic/kode-sdk';
 
-type ContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'reasoning'; reasoning: string; meta?: { signature?: string } }
-  | { type: 'image'; base64?: string; url?: string; mime_type?: string; file_id?: string }
-  | { type: 'audio'; base64?: string; url?: string; mime_type?: string }
-  | { type: 'file'; base64?: string; url?: string; filename?: string; mime_type?: string; file_id?: string }
-  | { type: 'tool_use'; id: string; name: string; input: any; meta?: Record<string, any> }
-  | { type: 'tool_result'; tool_use_id: string; content: any; is_error?: boolean };
-```
-
-### Message Flow
-
-```
-Internal Message[] (Anthropic-style ContentBlocks)
-  -> Provider.formatMessages() -> External API format
-  -> API call
-  -> Response -> normalizeContent() -> Internal ContentBlock[]
-```
-
-### Supported Providers
-
-| Provider | API | Thinking Support | Files | Streaming |
-|----------|-----|------------------|-------|-----------|
-| Anthropic | Messages API | Extended Thinking (`interleaved-thinking-2025-05-14`) | Files API | SSE |
-| OpenAI | Chat Completions | `<think>` tags | - | SSE |
-| OpenAI | Responses API | `reasoning_effort` (store, previous_response_id) | File uploads | SSE |
-| Gemini | Generate Content | `thinkingLevel` (3.x) | GCS URIs | SSE |
-| DeepSeek | Chat Completions | `reasoning_content` (auto-strip from history) | - | SSE |
-| Qwen | Chat Completions | `thinking_budget` | - | SSE |
-| GLM | Chat Completions | `thinking.type: enabled` | - | SSE |
-| Minimax | Chat Completions | `reasoning_split` | - | SSE |
-| Kimi K2 | Chat Completions | `reasoning` field | - | SSE |
-| Groq/Cerebras | Chat Completions | OpenAI-compatible | - | SSE |
-
----
-
-## Provider Message Conversion Details
-
-### Anthropic Provider
-
-**API Format**: Anthropic Messages API with extended thinking beta
-
-```typescript
-// Internal -> Anthropic
-{
-  role: 'user' | 'assistant',
-  content: [
-    { type: 'text', text: '...' },
-    { type: 'thinking', thinking: '...', signature?: '...' },  // Extended thinking
-    { type: 'image', source: { type: 'base64', media_type: '...', data: '...' } },
-    { type: 'document', source: { type: 'file', file_id: '...' } },  // Files API
-    { type: 'tool_use', id: '...', name: '...', input: {...} },
-    { type: 'tool_result', tool_use_id: '...', content: '...' }
-  ]
-}
-```
-
-**Extended Thinking Configuration**:
-```typescript
-const provider = new AnthropicProvider(apiKey, model, baseUrl, proxyUrl, {
-  reasoningTransport: 'provider',  // 'provider' | 'text' | 'omit'
-  thinking: {
-    enabled: true,
-    budgetTokens: 10000  // Maps to thinking.budget_tokens
-  }
-});
-```
-
-**Beta Headers**: Automatically added based on message content:
-- `interleaved-thinking-2025-05-14`: When `reasoningTransport === 'provider'`
-- `files-api-2025-04-14`: When messages contain file blocks with `file_id`
-
-**Signature Preservation**: Critical for multi-turn conversations with Claude 4+. The SDK preserves thinking block signatures in `meta.signature`.
-
----
-
-### OpenAI Provider (Chat Completions API)
-
-**API Format**: OpenAI Chat Completions
-
-```typescript
-// Internal -> OpenAI Chat
-{
-  role: 'system' | 'user' | 'assistant' | 'tool',
-  content: '...' | [{ type: 'text', text: '...' }, { type: 'image_url', image_url: { url: '...' } }],
-  tool_calls?: [{ id: '...', type: 'function', function: { name: '...', arguments: '...' } }],
-  reasoning_content?: '...',  // DeepSeek/GLM/Qwen/Kimi
-  reasoning_details?: [{ text: '...' }]  // Minimax
-}
-```
-
-**Configuration-Driven Reasoning** (NEW in v2.7):
-
-The OpenAI provider now uses a configuration-driven approach instead of hardcoded provider detection:
-
-```typescript
-// ReasoningConfig interface
-interface ReasoningConfig {
-  fieldName?: 'reasoning_content' | 'reasoning_details';  // Response field name
-  requestParams?: Record<string, any>;  // Enable reasoning in request
-  stripFromHistory?: boolean;  // DeepSeek requirement
-}
-```
-
-**Provider-Specific Configuration Examples**:
-
-```typescript
-// DeepSeek (must strip reasoning from history)
-const deepseekProvider = new OpenAIProvider(apiKey, 'deepseek-reasoner', baseUrl, undefined, {
-  reasoningTransport: 'provider',
-  reasoning: {
-    fieldName: 'reasoning_content',
-    stripFromHistory: true,  // Critical: DeepSeek returns 400 if reasoning in history
+const agent = await Agent.create({
+  agentId: 'my-first-agent',
+  template: { systemPrompt: 'You are a helpful assistant.' },
+  deps: {
+    modelProvider: new AnthropicProvider(process.env.ANTHROPIC_API_KEY!),
+    sandbox: new LocalSandbox({ workDir: './workspace' }),
   },
 });
 
-// GLM (thinking.type parameter)
-const glmProvider = new OpenAIProvider(apiKey, 'glm-4.7', baseUrl, undefined, {
-  reasoningTransport: 'provider',
-  reasoning: {
-    fieldName: 'reasoning_content',
-    requestParams: { thinking: { type: 'enabled', clear_thinking: false } },
-  },
+// Subscribe to events
+agent.subscribeProgress({ kinds: ['text_chunk'] }, (event) => {
+  process.stdout.write(event.text);
 });
 
-// Minimax (reasoning_split parameter, reasoning_details field)
-const minimaxProvider = new OpenAIProvider(apiKey, 'minimax-moe-01', baseUrl, undefined, {
-  reasoningTransport: 'provider',
-  reasoning: {
-    fieldName: 'reasoning_details',
-    requestParams: { reasoning_split: true },
-  },
-});
-
-// Qwen (enable_thinking parameter)
-const qwenProvider = new OpenAIProvider(apiKey, 'qwen3-max', baseUrl, undefined, {
-  reasoningTransport: 'provider',
-  reasoning: {
-    fieldName: 'reasoning_content',
-    requestParams: { enable_thinking: true, thinking_budget: 10000 },
-    stripFromHistory: true,  // Similar to DeepSeek
-  },
-});
-
-// Kimi K2 (reasoning parameter)
-const kimiProvider = new OpenAIProvider(apiKey, 'kimi-k2-thinking', baseUrl, undefined, {
-  reasoningTransport: 'provider',
-  reasoning: {
-    fieldName: 'reasoning_content',
-    requestParams: { reasoning: 'enabled' },
-  },
-});
-```
-
-**Tool Message Conversion**:
-```typescript
-// Internal tool_result -> OpenAI tool message
-{ role: 'tool', tool_call_id: '...', content: '...', name: '...' }
-```
-
-**Image Handling**:
-- URL images: `{ type: 'image_url', image_url: { url: 'https://...' } }`
-- Base64 images: `{ type: 'image_url', image_url: { url: 'data:image/png;base64,...' } }`
-
-**Reasoning Transport**:
-- `text`: Reasoning wrapped as `<think>...</think>` in text content
-- `provider`: Uses provider-specific fields (configured via `reasoning.fieldName`)
-
----
-
-### OpenAI Provider (Responses API)
-
-**API Format**: OpenAI Responses API (GPT-5.x reasoning models)
-
-```typescript
-// Internal -> OpenAI Responses
-{
-  model: 'gpt-5.2',
-  input: [
-    { role: 'user', content: [{ type: 'input_text', text: '...' }] },
-    { role: 'assistant', content: [{ type: 'output_text', text: '...' }] }
-  ],
-  reasoning?: { effort: 'medium' },  // none | minimal | low | medium | high | xhigh
-  store?: true,  // Enable state persistence
-  previous_response_id?: 'resp_...'  // Multi-turn continuation
-}
-```
-
-**File Handling**:
-```typescript
-// File with ID
-{ type: 'input_file', file_id: '...' }
-// File with URL
-{ type: 'input_file', file_url: '...' }
-// File with base64
-{ type: 'input_file', filename: '...', file_data: 'data:application/pdf;base64,...' }
-```
-
-**Configuration** (NEW in v2.7):
-```typescript
-const provider = new OpenAIProvider(apiKey, 'gpt-5.2', baseUrl, undefined, {
-  api: 'responses',  // Use Responses API instead of Chat Completions
-  responses: {
-    reasoning: { effort: 'high' },  // Reasoning effort level
-    store: true,  // Enable response storage for continuation
-    previousResponseId: 'resp_abc123',  // Resume from previous response
-  },
-});
-```
-
-**Multi-Turn Conversation Flow**:
-```typescript
-// First request
-const response1 = await provider.complete(messages);
-const responseId = response1.metadata?.responseId;  // Store for continuation
-
-// Second request (continues from first)
-provider.configure({
-  responses: { ...provider.getConfig().responses, previousResponseId: responseId }
-});
-const response2 = await provider.complete(newMessages);
+// Chat with the agent
+await agent.chat('Hello! What can you help me with?');
 ```
 
 ---
 
-### Gemini Provider
+## Core Concepts
 
-**API Format**: Gemini Generate Content API
+### 1. Three-Channel Event System
 
-```typescript
-// Internal -> Gemini
-{
-  contents: [
-    {
-      role: 'user' | 'model',
-      parts: [
-        { text: '...' },
-        { inline_data: { mime_type: '...', data: '...' } },  // Base64 images/files
-        { file_data: { mime_type: '...', file_uri: 'gs://...' } },  // GCS files
-        { functionCall: { name: '...', args: {...} } },
-        { functionResponse: { name: '...', response: { content: '...' } } }
-      ]
-    }
-  ],
-  systemInstruction?: { parts: [{ text: '...' }] },
-  tools?: [{ functionDeclarations: [...] }],
-  generationConfig?: {
-    temperature: 0.7,
-    maxOutputTokens: 4096,
-    thinkingConfig: { thinkingLevel: 'HIGH' }  // Gemini 3.x
-  }
-}
+```
++-------------+     +-------------+     +-------------+
+|  Progress   |     |   Control   |     |   Monitor   |
++-------------+     +-------------+     +-------------+
+| text_chunk  |     | permission  |     | tool_audit  |
+| tool:start  |     | _required   |     | state_change|
+| tool:complete|    | approval    |     | token_usage |
+| done        |     | _response   |     | error       |
++-------------+     +-------------+     +-------------+
+      |                   |                   |
+      v                   v                   v
+   Your UI         Approval Service     Observability
 ```
 
-**Role Mapping**:
-- `assistant` -> `model`
-- `user` -> `user`
-- `system` -> `systemInstruction`
+### 2. Crash Recovery & Breakpoints
 
-**Thinking Configuration** (Gemini 3.x):
-```typescript
-const provider = new GeminiProvider(apiKey, model, baseUrl, proxyUrl, {
-  thinking: {
-    level: 'high'  // minimal | low | medium | high -> MINIMAL | LOW | MEDIUM | HIGH
-  }
-});
+```
+Agent Execution Flow:
+
+  READY -> PRE_MODEL -> STREAMING -> TOOL_PENDING -> PRE_TOOL -> EXECUTING -> POST_TOOL
+    |         |            |             |              |           |           |
+    +-------- WAL Protected State -------+-- Approval --+---- Tool Execution ---+
+
+On crash: Resume from last safe breakpoint, auto-seal incomplete tool calls
 ```
 
-**Tool Schema Sanitization**: Gemini requires clean JSON Schema without:
-- `additionalProperties`
-- `$schema`
-- `$defs`
-- `definitions`
+### 3. Fork & Trajectory Exploration
 
----
-
-### High-Speed Inference Providers (Groq/Cerebras)
-
-Both Groq and Cerebras provide OpenAI-compatible APIs with extremely fast inference speeds:
-
-**Groq** (LPU Inference Engine):
 ```typescript
-const groqProvider = new OpenAIProvider(apiKey, 'llama-3.3-70b-versatile', undefined, undefined, {
-  baseUrl: 'https://api.groq.com/openai/v1',  // Auto-appends /v1
-  // Reasoning models (Qwen 3 32B, QwQ-32B)
-  reasoning: {
-    fieldName: 'reasoning_content',
-    requestParams: { reasoning_format: 'parsed', reasoning_effort: 'default' },
-  },
-});
-// Speed: ~276 tokens/second for Llama 3.3 70B
-```
+// Create a checkpoint at current state
+const checkpointId = await agent.checkpoint('before-decision');
 
-**Cerebras** (Wafer-Scale Engine):
-```typescript
-const cerebrasProvider = new OpenAIProvider(apiKey, 'qwen-3-32b', undefined, undefined, {
-  baseUrl: 'https://api.cerebras.ai/v1',
-  reasoning: {
-    fieldName: 'reasoning_content',
-    requestParams: { reasoning_format: 'separate' },
-  },
-});
-// Speed: ~2,600 tokens/second for Qwen3 32B
-```
+// Fork to explore different paths
+const explorerA = await agent.fork(checkpointId);
+const explorerB = await agent.fork(checkpointId);
 
-**Key Features**:
-- OpenAI-compatible Chat Completions API
-- Tool calling with `strict` mode (Cerebras)
-- Streaming support with SSE
-- Rate limits: 50 RPM (Cerebras), higher for Groq paid tiers
-
----
-
-## ReasoningTransport Options
-
-Controls how thinking/reasoning content is handled across providers:
-
-| Transport | Description | Use Case |
-|-----------|-------------|----------|
-| `provider` | Native provider format (Anthropic thinking blocks, OpenAI reasoning tokens) | Full thinking visibility, multi-turn conversations |
-| `text` | Wrapped in `<think>...</think>` tags as text | Cross-provider compatibility, text-based pipelines |
-| `omit` | Excluded from message history | Privacy, token reduction |
-
----
-
-## Prompt Caching
-
-The SDK supports prompt caching across multiple providers for significant cost savings:
-
-| Provider | Caching Type | Min Tokens | TTL | Savings |
-|----------|--------------|------------|-----|---------|
-| Anthropic | Explicit (`cache_control`) | 1024-4096 | 5m/1h | 90% |
-| OpenAI | Automatic | 1024 | 24h | 75% |
-| Gemini | Implicit + Explicit | 256-4096 | Custom | 75% |
-| DeepSeek | Automatic prefix | 64 | Hours | 90% |
-| Qwen | Explicit (`cache_control`) | 1024 | 5m | 90% |
-
-**Anthropic Cache Example**:
-```typescript
-const provider = new AnthropicProvider(apiKey, 'claude-sonnet-4.5', baseUrl, undefined, {
-  beta: { extendedCacheTtl: true },  // Enable 1-hour TTL
-  cache: { breakpoints: 4, defaultTtl: '1h' },
-});
-
-// Mark content for caching in messages
-const messages = [{
-  role: 'user',
-  content: [{
-    type: 'text',
-    text: 'Large document...',
-    cacheControl: { type: 'ephemeral', ttl: '1h' }
-  }]
-}];
-```
-
-**Usage Tracking**:
-```typescript
-const response = await provider.complete(messages);
-console.log(response.usage);
-// {
-//   input_tokens: 100,
-//   cache_creation_input_tokens: 50000,  // First request
-//   cache_read_input_tokens: 50000,      // Subsequent requests
-//   output_tokens: 500
-// }
+await explorerA.chat('Try approach A');
+await explorerB.chat('Try approach B');
 ```
 
 ---
 
-## Session Compression & Resume
+## Examples
 
-The SDK's context management works with all providers:
-
-1. **Message Windowing**: Automatically manages context window limits per provider
-2. **Safe Fork Points**: Natural breakpoints at tool results and pure text responses
-3. **Reasoning Preservation**: Thinking blocks can be:
-   - Preserved with signatures (Anthropic)
-   - Converted to text tags (cross-provider)
-   - Omitted for compression
-
-```typescript
-// Resume with thinking context
-const agent = await Agent.resume(sessionId, {
-  provider: new AnthropicProvider(apiKey, model, baseUrl, undefined, {
-    reasoningTransport: 'provider'  // Preserve thinking for continuation
-  })
-});
-```
+| Example | Description | Key Features |
+|---------|-------------|--------------|
+| `npm run example:getting-started` | Minimal chat loop | Progress stream, basic setup |
+| `npm run example:agent-inbox` | Event-driven inbox | Todo management, tool concurrency |
+| `npm run example:approval` | Approval workflow | Control channel, hooks, policies |
+| `npm run example:room` | Multi-agent collaboration | AgentPool, Room, Fork |
+| `npm run example:scheduler` | Long-running with reminders | Scheduler, step triggers |
+| `npm run example:nextjs` | Next.js API integration | Resume-or-create, SSE streaming |
 
 ---
 
-## Testing Providers
+## Architecture for Scale
 
-Run integration tests with real API connections:
+For production deployments serving many users, we recommend the **Worker Microservice Pattern**:
 
-```bash
-# Configure credentials
-cp .env.test.example .env.test
-# Edit .env.test with your API keys
-
-# Run all provider tests
-npm test -- --testPathPattern="multi-provider"
-
-# Run specific provider
-npm test -- --testPathPattern="multi-provider" --testNamePattern="Anthropic"
 ```
+                        +------------------+
+                        |    Frontend      |  Next.js / SvelteKit (Vercel OK)
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |   API Gateway    |  Auth, routing, queue push
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |  Message Queue   |  Redis / SQS / NATS
+                        +--------+---------+
+                                 |
+            +--------------------+--------------------+
+            |                    |                    |
+   +--------v-------+   +--------v-------+   +--------v-------+
+   |   Worker 1     |   |   Worker 2     |   |   Worker N     |
+   | (KODE SDK)     |   | (KODE SDK)     |   | (KODE SDK)     |
+   | Long-running   |   | Long-running   |   | Long-running   |
+   +--------+-------+   +--------+-------+   +--------+-------+
+            |                    |                    |
+            +--------------------+--------------------+
+                                 |
+                        +--------v---------+
+                        | Distributed Store|  PostgreSQL / Redis
+                        +------------------+
+```
+
+**Key Principles:**
+1. **API layer is stateless** - Can run on serverless
+2. **Workers are stateful** - Run KODE SDK, need long-running processes
+3. **Store is shared** - Single source of truth for agent state
+4. **Queue decouples** - Request handling from agent execution
+
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for detailed deployment guides.
 
 ---
 
-## 下一步
+## Documentation
 
-- 使用 `examples/` 作为蓝本接入你自己的工具、存储、审批系统。
-- 将 Monitor 事件接入现有 observability 平台，沉淀治理与审计能力。
-- 参考 `docs/` 中的扩展指南，为企业自定义 Sandbox、模型 Provider 或多团队 Agent 协作流程。
+| Document | Description |
+|----------|-------------|
+| [Architecture Guide](./docs/ARCHITECTURE.md) | Mental model, deployment patterns, scaling strategies |
+| [Quickstart](./docs/quickstart.md) | Step-by-step first agent |
+| [Events System](./docs/events.md) | Three-channel event model |
+| [API Reference](./docs/api.md) | Core types and interfaces |
+| [Playbooks](./docs/playbooks.md) | Common patterns and recipes |
+| [Deployment](./docs/DEPLOYMENT.md) | Production deployment guide |
+| [Roadmap](./docs/ROADMAP.md) | Future development plans |
 
-欢迎在 Issue / PR 中分享反馈与场景诉求，让 KODE SDK 更贴近真实协作团队的需求。
+### Scenario Guides
+
+| Scenario | Guide |
+|----------|-------|
+| CLI Tools | [docs/scenarios/cli-tools.md](./docs/scenarios/cli-tools.md) |
+| Desktop Apps | [docs/scenarios/desktop-apps.md](./docs/scenarios/desktop-apps.md) |
+| IDE Plugins | [docs/scenarios/ide-plugins.md](./docs/scenarios/ide-plugins.md) |
+| Web Backend | [docs/scenarios/web-backend.md](./docs/scenarios/web-backend.md) |
+| Large-scale ToC | [docs/scenarios/large-scale-toc.md](./docs/scenarios/large-scale-toc.md) |
+
+---
+
+## Supported Providers
+
+| Provider | Streaming | Tool Calling | Thinking/Reasoning |
+|----------|-----------|--------------|-------------------|
+| **Anthropic** | SSE | Native | Extended Thinking |
+| **OpenAI** | SSE | Function Calling | o1/o3 reasoning |
+| **Gemini** | SSE | Function Calling | thinkingLevel |
+| **DeepSeek** | SSE | OpenAI-compatible | reasoning_content |
+| **Qwen** | SSE | OpenAI-compatible | thinking_budget |
+| **Groq/Cerebras** | SSE | OpenAI-compatible | - |
+
+---
+
+## Roadmap
+
+### v2.8 - Storage Foundation
+- PostgresStore with connection pooling
+- Distributed locking (Advisory Lock)
+- Graceful shutdown support
+
+### v3.0 - Performance
+- Incremental message storage (append-only)
+- Copy-on-Write fork optimization
+- Event sampling and aggregation
+
+### v3.5 - Distributed
+- Agent Scheduler with LRU caching
+- Distributed EventBus (Redis Pub/Sub)
+- Worker mode helpers
+
+See [docs/ROADMAP.md](./docs/ROADMAP.md) for the complete roadmap.
+
+---
+
+## Contributing
+
+We welcome contributions! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
+
+## License
+
+MIT License - see [LICENSE](./LICENSE) for details.
+
+---
+
+**KODE SDK** - *The runtime kernel that lets you build agents that persist, recover, and explore.*

@@ -8,7 +8,7 @@ export {
   SubscribeOptions,
   SendOptions,
 } from './core/agent';
-export { AgentPool } from './core/pool';
+export { AgentPool, GracefulShutdownOptions, ShutdownResult } from './core/pool';
 export { Room } from './core/room';
 export { Scheduler, AgentSchedulerHandle } from './core/scheduler';
 export { EventBus } from './core/events';
