@@ -145,12 +145,12 @@ On crash: Resume from last safe breakpoint, auto-seal incomplete tool calls
 ### 3. Fork & Trajectory Exploration
 
 ```typescript
-// Create a checkpoint at current state
-const checkpointId = await agent.checkpoint('before-decision');
+// Create a snapshot at current state
+const snapshotId = await agent.snapshot('before-decision');
 
 // Fork to explore different paths
-const explorerA = await agent.fork(checkpointId);
-const explorerB = await agent.fork(checkpointId);
+const explorerA = await agent.fork(snapshotId);
+const explorerB = await agent.fork(snapshotId);
 
 await explorerA.chat('Try approach A');
 await explorerB.chat('Try approach B');

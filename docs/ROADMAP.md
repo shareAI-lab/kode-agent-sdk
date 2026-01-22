@@ -17,7 +17,7 @@
 | Multi-provider | Stable | Anthropic, OpenAI, Gemini, DeepSeek, Qwen, GLM... |
 | Tool System | Stable | Built-in + MCP protocol |
 | AgentPool | Stable | Up to 50 agents per process |
-| Checkpointer | Stable | Memory, File, Redis implementations |
+| Snapshot/Fork | Stable | Explore different agent trajectories |
 | Context Compression | Stable | Automatic history management |
 | Hook System | Stable | Pre/post model and tool hooks |
 

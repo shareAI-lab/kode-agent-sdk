@@ -108,7 +108,7 @@ export async function run() {
 - Scheduler & TimeBridge、MessageQueue、ContextManager、FilePool
 - 基础设施：JSONStore WAL、LocalSandbox 边界与危险命令拦截
 - 内置工具：文件、Bash、Todo 工具执行
-- 其他：Checkpointer、ToolRunner、AgentId 等辅助模块
+- 其他：ToolRunner、AgentId 等辅助模块
 
 ### 集成测试
 - 真实模型多轮对话与流式输出
