@@ -16,6 +16,9 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false
   },
+  "ts-node": {
+    "preferTsExts": true
+  },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "examples", "tests"]
 }

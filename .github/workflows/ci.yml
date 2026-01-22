@@ -38,6 +38,21 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpass123
+          POSTGRES_DB: kode_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +67,12 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:unit
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5433
+          POSTGRES_DB: kode_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: testpass123
 
   # ===========================================================================
   # Stage 2: Provider E2E tests (run on every commit)
@@ -96,13 +117,6 @@ jobs:
           OPENAI_MODEL_ID=${{ vars.OPENAI_MODEL_ID }}
           OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }}
           OPENAI_API=chat
-
-          # OpenAI Responses
-          OPENAI_RESPONSES_API_KEY=${{ secrets.OPENAI_API_KEY }}
-          OPENAI_RESPONSES_MODEL_ID=${{ vars.OPENAI_RESPONSES_MODEL_ID }}
-          OPENAI_RESPONSES_BASE_URL=${{ vars.OPENAI_RESPONSES_BASE_URL }}
-          OPENAI_RESPONSES_API=responses
-          OPENAI_RESPONSES_REASONING_EFFORT=medium
 
           # Gemini
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}

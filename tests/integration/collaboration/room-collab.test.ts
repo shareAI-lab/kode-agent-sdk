@@ -191,10 +191,13 @@ runner.test('Room 多代理协作保持事件与Todo一致', async () => {
   detachPermissionRequired();
   detachPermissionDecided();
 
+  await (planner as any).sandbox?.dispose?.();
+  await (dev as any).sandbox?.dispose?.();
   await pool.delete('agt-planner');
   await pool.delete('agt-dev');
-  fs.rmSync(storeDir, { recursive: true, force: true });
-  fs.rmSync(baseWorkDir, { recursive: true, force: true });
+  await wait(200);
+  fs.rmSync(storeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  fs.rmSync(baseWorkDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 export async function run() {

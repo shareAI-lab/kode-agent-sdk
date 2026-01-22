@@ -31,7 +31,10 @@ runner.test('Manual resume preserves hooks, todos, custom tool and subagent stat
   const harness = await IntegrationHarness.create({
     customTemplate: {
       id: 'resume-manual',
-      systemPrompt: 'You are a validation agent. Always call resume_probe before replying and keep todos consistent.',
+      systemPrompt:
+        'You are a validation agent. Call resume_probe exactly once per user request before replying, ' +
+        'but do not call it again when responding to tool_result or system-reminder messages. ' +
+        'Keep todos consistent.',
       tools: ['resume_probe', 'todo_write', 'todo_read'],
       runtime: {
         todo: { enabled: true, remindIntervalSteps: 1, reminderOnStart: true },
@@ -83,7 +86,7 @@ runner.test('Manual resume preserves hooks, todos, custom tool and subagent stat
     label: 'Resume阶段2',
     prompt:
       '请再次调用 resume_probe 记录“阶段2”，并确认 todo 仍为 ResumeCase。' +
-      '请在回复中明确包含“阶段2”和“ResumeCase”。',
+      '你的回复中必须原样包含“阶段2”和“ResumeCase”。',
     expectation: {
       includes: ['阶段2', 'ResumeCase'],
     },
@@ -191,7 +194,20 @@ runner.test('Crash resume seals pending approvals and preserves state', async ()
   const fileContent = fs.readFileSync(targetFile, 'utf-8');
   expect.toEqual(fileContent.includes('原始内容'), true);
 
+  const handledApprovals = new Set<string>();
+  const offApproval = resumed.on('permission_required', async (evt: any) => {
+    const callId = evt?.call?.id || evt?.callId || evt?.permissionId;
+    if (!callId || handledApprovals.has(callId)) return;
+    handledApprovals.add(callId);
+    if (typeof evt?.respond === 'function') {
+      await evt.respond('allow', { note: 'auto allow in crash resume follow-up' });
+      return;
+    }
+    await resumed.decide(callId, 'allow', 'auto allow in crash resume follow-up');
+  });
+
   const followUp = await resumed.chat('请确认上一次写入被封存，并说明文件仍是原始内容。');
+  offApproval();
   expect.toBeTruthy(followUp.text);
 
   await (resumed as any).sandbox?.dispose?.();

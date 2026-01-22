@@ -66,7 +66,7 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
     id: 'integration-task-orchestrator',
     systemPrompt: [
       'You orchestrate sub-agents to plan and execute updates.',
-      'Before replying, ensure coordination_probe is called with the current stage.',
+      'Call coordination_probe exactly once per user request before replying, but do not call it again when responding to tool_result or system-reminder messages.',
       'Use todo_* tools to mirror progress and rely on sub-agents for specialised work.',
     ].join('\n'),
     tools: ['coordination_probe', 'task_run', 'todo_write', 'todo_read', 'fs_write', 'fs_read'],
@@ -126,7 +126,8 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
   const stage1 = await harness.chatStep({
     label: '阶段1',
     prompt:
-      '请先调用 coordination_probe 记录阶段1，然后委派分析子代理总结“更新task-run测试”要点，并创建一条 ResumeTask 的 todo。',
+      '请先调用 coordination_probe，且 stage 参数必须是“阶段1-规划”。' +
+      '你的回复中必须原样包含“阶段1”。随后委派分析子代理总结“更新task-run测试”要点，并创建一条 ResumeTask 的 todo。',
     expectation: {
       includes: ['阶段1', 'ResumeTask'],
     },
@@ -149,7 +150,8 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
   const stage2 = await harness.chatStep({
     label: '阶段2',
     prompt:
-      '请委派子代理将 task-run-composite.txt 内容改写为“子代理已成功更新”。确保获取审批后继续，并将 todo 状态标记为 in_progress。',
+      '请先调用 coordination_probe，且 stage 参数必须是“阶段2-编辑”。随后委派子代理将 task-run-composite.txt 内容改写为“子代理已成功更新”。' +
+      '确保获取审批后继续，并将 todo 状态标记为 in_progress。',
   });
 
   const controlEvents = await permissionRequired;
@@ -158,6 +160,10 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
     stage2.events.filter((evt) => evt.channel === 'control' && evt.event.type === 'permission_decided').length,
     1
   );
+  const monitorEventsStage2 = stage2.events.filter(
+    (evt) => evt.channel === 'monitor' && evt.event.type === 'tool_custom_event'
+  );
+  expect.toBeGreaterThanOrEqual(monitorEventsStage2.length, 1);
 
   const fileContent = fs.readFileSync(targetFile, 'utf-8');
   expect.toContain(fileContent, '子代理已成功更新');
@@ -170,7 +176,7 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
   const stage3 = await harness.chatStep({
     label: '阶段3',
     prompt:
-      '请调用 coordination_probe 记录阶段3，将 todo 标记为完成，并委派分析子代理总结整个流程。',
+      '请先调用 coordination_probe，且 stage 参数必须是“阶段3-总结”。随后将 todo 标记为完成，并委派分析子代理总结整个流程。',
     expectation: {
       includes: ['阶段3', '完成'],
     },
@@ -203,6 +209,7 @@ runner.test('task_run 协调多子代理并结合 todo / 权限 / Hook', async (
   expect.toBeTruthy(notedStages.some((stage) => stage.includes('阶段2')));
   expect.toBeTruthy(notedStages.some((stage) => stage.includes('阶段3')));
 
+  await (agent as any).sandbox?.dispose?.();
   await harness.cleanup();
 });
 

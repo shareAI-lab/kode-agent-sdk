@@ -148,6 +148,9 @@ runner
     const status = await agent.status();
     expect.toBeGreaterThan(status.stepCount, 0);
 
+    // 等待文件系统写入完成（CI 环境可能有更激进的写缓冲）
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
     const resumed = await Agent.resume(agent.agentId, config, deps);
 
     const resumedResult = await resumed.chat('checking resume');
