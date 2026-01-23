@@ -80,6 +80,46 @@ npm run example:approval           # Tool approval workflow
 npm run example:room               # Multi-agent collaboration
 ```
 
+## Architecture for Scale
+
+For production deployments serving many users, we recommend the **Worker Microservice Pattern**:
+
+```
+                        +------------------+
+                        |    Frontend      |  Next.js / SvelteKit (Vercel OK)
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |   API Gateway    |  Auth, routing, queue push
+                        +--------+---------+
+                                 |
+                        +--------v---------+
+                        |  Message Queue   |  Redis / SQS / NATS
+                        +--------+---------+
+                                 |
+            +--------------------+--------------------+
+            |                    |                    |
+   +--------v-------+   +--------v-------+   +--------v-------+
+   |   Worker 1     |   |   Worker 2     |   |   Worker N     |
+   | (KODE SDK)     |   | (KODE SDK)     |   | (KODE SDK)     |
+   | Long-running   |   | Long-running   |   | Long-running   |
+   +--------+-------+   +--------+-------+   +--------+-------+
+            |                    |                    |
+            +--------------------+--------------------+
+                                 |
+                        +--------v---------+
+                        | Distributed Store|  PostgreSQL / Redis
+                        +------------------+
+```
+
+**Key Principles:**
+1. **API layer is stateless** - Can run on serverless
+2. **Workers are stateful** - Run KODE SDK, need long-running processes
+3. **Store is shared** - Single source of truth for agent state
+4. **Queue decouples** - Request handling from agent execution
+
+See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detailed deployment guides.
+
 ## Supported Providers
 
 | Provider | Streaming | Tools | Reasoning | Files |
