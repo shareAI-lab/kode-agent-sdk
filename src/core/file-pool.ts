@@ -24,6 +24,7 @@ interface FilePoolOptions {
 export class FilePool {
   private records = new Map<string, FileRecord>();
   private watchers = new Map<string, string>();
+  private watchPending = new Map<string, Promise<void>>();  // per-path 锁，防止并发创建 watcher
   private readonly watchEnabled: boolean;
   private readonly onChange?: (event: { path: string; mtime: number }) => void;
 
@@ -106,10 +107,34 @@ export class FilePool {
     return Array.from(this.records.keys());
   }
 
-  private async ensureWatch(path: string) {
+  private async ensureWatch(path: string): Promise<void> {
     if (!this.watchEnabled) return;
     if (!this.sandbox.watchFiles) return;
     if (this.watchers.has(path)) return;
+
+    // 检查是否有正在进行的 watch 操作（per-path 锁）
+    const pending = this.watchPending.get(path);
+    if (pending) {
+      await pending;  // 等待已有操作完成
+      return;
+    }
+
+    // 创建 watch 操作并存储 Promise
+    const watchPromise = this.doWatch(path);
+    this.watchPending.set(path, watchPromise);
+
+    try {
+      await watchPromise;
+    } finally {
+      this.watchPending.delete(path);
+    }
+  }
+
+  private async doWatch(path: string): Promise<void> {
+    // 再次检查（可能在等待期间已被设置）
+    if (this.watchers.has(path)) return;
+    if (!this.sandbox.watchFiles) return;
+
     try {
       const id = await this.sandbox.watchFiles([path], (event) => {
         const record = this.records.get(path);

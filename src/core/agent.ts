@@ -1340,12 +1340,8 @@ export class Agent {
       };
       outcome = await this.hooks.runPostToolUse(outcome, context);
 
-      if (toolUse.name === 'fs_read' && toolUse.input?.path) {
-        await this.filePool.recordRead(toolUse.input.path);
-      }
-      if ((toolUse.name === 'fs_write' || toolUse.name === 'fs_edit' || toolUse.name === 'fs_multi_edit') && toolUse.input?.path) {
-        await this.filePool.recordEdit(toolUse.input.path);
-      }
+      // NOTE: recordRead/recordEdit 已在各工具内部调用，此处不再重复调用
+      // 参考: fs_read/index.ts:25, fs_write/index.ts:26, fs_edit/index.ts:29,53, fs_multi_edit/index.ts:60,92
 
       const success = outcome.ok !== false;
       const duration = Date.now() - (this.toolRecords.get(record.id)?.startedAt ?? Date.now());
