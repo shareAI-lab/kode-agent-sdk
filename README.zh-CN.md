@@ -102,6 +102,7 @@ npm run example:room               # 多Agent协作
 | **使用指南** | |
 | [事件系统](./docs/zh-CN/guides/events.md) | 三通道事件系统 |
 | [工具系统](./docs/zh-CN/guides/tools.md) | 内置工具与自定义工具 |
+| [Skills 系统](./docs/zh-CN/guides/skills.md) | Skills 可复用提示词系统 |
 | [Provider 配置](./docs/zh-CN/guides/providers.md) | 模型 Provider 配置 |
 | [数据库存储](./docs/zh-CN/guides/database.md) | SQLite/PostgreSQL 持久化 |
 | [恢复与分叉](./docs/zh-CN/guides/resume-fork.md) | 崩溃恢复与分支 |

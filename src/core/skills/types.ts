@@ -63,6 +63,8 @@ export interface SkillInfo {
   path: string;
   /** 技能根目录 */
   baseDir: string;
+  /** 文件夹名称（技能目录名） */
+  folderName: string;
   /** 创建时间 */
   createdAt?: string;
   /** 更新时间 */
@@ -123,6 +125,16 @@ export interface ArchivedSkillInfo {
   archivedName: string;
   /** archived目录中的完整路径 */
   archivedPath: string;
+  /** 文件夹名称（归档目录名） */
+  folderName: string;
   /** 归档时间 */
   archivedAt: string;
+  /** 技能名称（从SKILL.md解析） */
+  name?: string;
+  /** 技能描述（从SKILL.md解析） */
+  description?: string;
+  /** 许可证（从SKILL.md解析） */
+  license?: string;
+  /** 其他元数据 */
+  metadata?: Record<string, string>;
 }

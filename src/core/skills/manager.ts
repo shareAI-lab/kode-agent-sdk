@@ -19,12 +19,13 @@ export class SkillsManager {
   private skillsDir: string;
   private cache: Map<string, SkillMetadata> = new Map();
   private allowedSkills?: string[];
+  private skillsDisabled: boolean = false;
 
   constructor(skillsDir?: string, allowedSkills?: string[]) {
     // 优先使用传入的路径，其次使用环境变量，最后使用默认路径
-    // 默认路径：程序当前工作目录下的 skills/
+    // 默认路径：程序当前工作目录下的 .skills/
     const envSkillsDir = process.env.SKILLS_DIR;
-    const defaultSkillsDir = path.join(process.cwd(), 'skills');
+    const defaultSkillsDir = path.join(process.cwd(), '.skills');
 
     this.skillsDir = path.resolve(
       skillsDir ||
@@ -33,10 +34,24 @@ export class SkillsManager {
     );
 
     // 设置允许加载的 skills 白名单
-    this.allowedSkills = allowedSkills;
+    // 特殊处理：
+    // 1. 如果白名单包含 "/*/"，则完全禁用技能功能
+    // 2. 如果白名单包含"*"，则视为未设置白名单（加载所有技能）
+    if (allowedSkills && allowedSkills.length === 1 && allowedSkills[0] === '/*/') {
+      this.skillsDisabled = true;
+      this.allowedSkills = [];
+      logger.log(`[SkillsManager] Skills disabled (whitelist is "/*/")`);
+    } else if (allowedSkills && allowedSkills.length === 1 && allowedSkills[0] === '*') {
+      this.allowedSkills = undefined;
+      logger.log(`[SkillsManager] Whitelist contains "*", loading all skills`);
+    } else {
+      this.allowedSkills = allowedSkills;
+    }
 
     logger.log(`[SkillsManager] Initialized with skills directory: ${this.skillsDir}`);
-    if (this.allowedSkills) {
+    if (this.skillsDisabled) {
+      logger.log(`[SkillsManager] Skills feature is disabled`);
+    } else if (this.allowedSkills) {
       logger.log(`[SkillsManager] Allowed skills whitelist: ${this.allowedSkills.join(', ')}`);
     }
   }
@@ -46,6 +61,12 @@ export class SkillsManager {
    * 每次调用时重新扫描，确保读取最新数据
    */
   async scan(): Promise<SkillMetadata[]> {
+    // 如果技能功能被禁用，直接返回空数组
+    if (this.skillsDisabled) {
+      logger.log(`[SkillsManager] Skills disabled, skipping scan`);
+      return [];
+    }
+
     // 清空缓存
     this.cache.clear();
 
@@ -62,7 +83,7 @@ export class SkillsManager {
 
       // 提取每个skill的元数据
       for (const entry of entries) {
-        const metadata = await this.parseSkillMetadata(entry);
+        const metadata = await this.parseSkillMetadata(entry.skillMdPath, entry.folderName);
         if (metadata) {
           // 如果设置了白名单，只加载白名单中的 skills
           if (this.allowedSkills) {
@@ -130,9 +151,10 @@ export class SkillsManager {
 
   /**
    * 递归扫描目录，查找所有SKILL.md
+   * 返回格式: { skillMdPath: string, folderName: string }[]
    */
-  private async scanDirectory(dir: string): Promise<string[]> {
-    const skillFiles: string[] = [];
+  private async scanDirectory(dir: string): Promise<Array<{ skillMdPath: string; folderName: string }>> {
+    const skills: Array<{ skillMdPath: string; folderName: string }> = [];
 
     try {
       const entries = await fs.readdir(dir, { withFileTypes: true });
@@ -144,11 +166,12 @@ export class SkillsManager {
           // 检查是否有SKILL.md
           const skillMdPath = path.join(fullPath, 'SKILL.md');
           if (await this.fileExists(skillMdPath)) {
-            skillFiles.push(skillMdPath);
+            // 返回SKILL.md路径和文件夹名称
+            skills.push({ skillMdPath, folderName: entry.name });
           } else {
             // 递归扫描子目录
             const subSkills = await this.scanDirectory(fullPath);
-            skillFiles.push(...subSkills);
+            skills.push(...subSkills);
           }
         }
       }
@@ -156,13 +179,15 @@ export class SkillsManager {
       logger.warn(`[SkillsManager] Error reading directory ${dir}:`, error.message);
     }
 
-    return skillFiles;
+    return skills;
   }
 
   /**
    * 解析SKILL.md，提取元数据
+   * @param skillMdPath SKILL.md文件的完整路径
+   * @param folderName 技能文件夹名称（作为技能标识符）
    */
-  private async parseSkillMetadata(skillMdPath: string): Promise<SkillMetadata | null> {
+  private async parseSkillMetadata(skillMdPath: string, folderName: string): Promise<SkillMetadata | null> {
     try {
       const content = await fs.readFile(skillMdPath, 'utf-8');
 
@@ -174,16 +199,11 @@ export class SkillsManager {
       }
 
       const yaml = match[1];
-      const nameMatch = yaml.match(/^name:\s*(.+)$/m);
       const descMatch = yaml.match(/^description:\s*(.+)$/m);
 
-      if (!nameMatch) {
-        logger.warn(`[SkillsManager] Invalid SKILL.md (missing name): ${skillMdPath}`);
-        return null;
-      }
-
+      // 使用文件夹名称作为技能标识符，而不是从YAML中读取name
       return {
-        name: nameMatch[1].trim(),
+        name: folderName,
         description: descMatch ? descMatch[1].trim() : '',
         path: skillMdPath,
         baseDir: path.dirname(skillMdPath),

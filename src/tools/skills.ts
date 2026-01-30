@@ -55,11 +55,11 @@ export function createSkillsTool(skillsManager: SkillsManager) {
 
       // 注释掉 list 操作的代码
       // if (action === 'list') {
-      //   // 列出所有skills
+      //   // 列出所有skills（使用文件夹名称作为标识符）
       //   const skills = await skillsManager.getSkillsMetadata();
       //
       //   const skillsList = skills.map(s => ({
-      //     name: s.name,
+      //     name: s.name,  // 文件夹名称
       //     description: s.description,
       //   }));
       //

@@ -2,6 +2,17 @@
 
 KODE SDK provides a complete Skills system supporting modular, reusable capability units that allow Agents to dynamically load and execute specific skills.
 
+> **⚠️ Breaking Changes**
+>
+> **Default Skills directory has changed from `skills/` to `.skills/`**
+>
+> - If you haven't set the `SKILLS_DIR` environment variable, SkillsManager now uses `.skills/` as the default directory
+> - **Impact**: All code that doesn't explicitly specify the skills directory path
+> - **Migration options**:
+>   - Option 1: Rename your existing `skills/` directory to `.skills/`
+>   - Option 2: Set environment variable `SKILLS_DIR` to the original directory (e.g., `export SKILLS_DIR=./skills`)
+>   - Option 3: Explicitly specify the path in code: `new SkillsManager('./skills')`
+
 ---
 
 ## Core Features
@@ -11,14 +22,14 @@ KODE SDK provides a complete Skills system supporting modular, reusable capabili
 | **Hot Reload** | Skills auto-reload when code changes |
 | **Metadata Injection** | Auto-inject skill descriptions into system prompt |
 | **Sandbox Isolation** | Each skill has independent file system space |
-| **Whitelist Filter** | Selectively load specific skills |
+| **Whitelist Filter** | Selectively load specific skills, supports `["/*/"]` (fully disabled) and `["*"]` (load all) special configs |
 
 ---
 
 ## Directory Structure
 
 ```
-skills/
+.skills/
 ├── skill-name/              # Skill directory
 │   ├── SKILL.md            # Skill definition (required)
 │   ├── metadata.json       # Skill metadata (optional)
@@ -69,17 +80,17 @@ Detailed instructions for using this skill...
 <!-- tabs:start -->
 #### **Linux / macOS**
 ```bash
-export SKILLS_DIR=/path/to/skills
+export SKILLS_DIR=/path/to/.skills
 ```
 
 #### **Windows (PowerShell)**
 ```powershell
-$env:SKILLS_DIR="/path/to/skills"
+$env:SKILLS_DIR="C:\path\to\.skills"
 ```
 
 #### **Windows (CMD)**
 ```cmd
-set SKILLS_DIR=/path/to/skills
+set SKILLS_DIR=C:\path\to\.skills
 ```
 <!-- tabs:end -->
 
@@ -96,7 +107,7 @@ import { SkillsManager } from '@shareai-lab/kode-sdk';
 
 // Create Skills manager
 const skillsManager = new SkillsManager(
-  './skills',           // Skills directory path
+  './.skills',          // Skills directory path (default is .skills)
   ['skill1', 'skill2']  // Optional: whitelist
 );
 
@@ -130,68 +141,87 @@ Limit Agent to only load specific skills:
 
 ```typescript
 // Only load whitelisted skills
-const manager = new SkillsManager('./skills', ['allowed-skill-1', 'allowed-skill-2']);
+const manager = new SkillsManager('./.skills', ['allowed-skill-1', 'allowed-skill-2']);
 const skills = await manager.getSkillsMetadata();
 // Returns only whitelisted skills
+
+// Special config: load all skills
+const managerAll = new SkillsManager('./.skills', ['*']);
+
+// Special config: fully disable skills feature
+const managerDisabled = new SkillsManager('./.skills', ['/*/']);
 ```
 
 ---
 
-## SkillsManagementManager (CRUD Operations)
+## SkillsManagementManager (Management Operations)
 
-SkillsManagementManager provides skill CRUD operations including create, update, and archive.
+SkillsManagementManager provides complete skill management operations including install, import, export, archive, and more.
 
 ### Basic Operations
 
 ```typescript
 import { SkillsManagementManager } from '@shareai-lab/kode-sdk';
 
-const manager = new SkillsManagementManager('./skills');
+const manager = new SkillsManagementManager('./.skills');
 
 // List all online skills
 const skills = await manager.listSkills();
 
-// Get skill details
-const skillDetail = await manager.getSkillInfo('skill-name');
-
-// Create new skill
-await manager.createSkill('new-skill', {
-  description: 'New skill description',
-  content: '# New Skill\n\nDetailed content...'
-});
-
-// Update skill
-await manager.updateSkill('skill-name', {
-  content: '# Updated content'
-});
-
-// Delete skill (move to archive)
-await manager.deleteSkill('skill-name');
-
 // List archived skills
 const archived = await manager.listArchivedSkills();
-
-// Restore archived skill
-await manager.restoreSkill('archived-skill');
 ```
 
-### File Operations
+### Skill Install & Import
 
 ```typescript
-// Get skill file tree
-const files = await manager.getSkillFileTree('skill-name');
+// Install skill (from GitHub repo, Git URL, or online skill library)
+await manager.installSkill('github:user/repo');
 
-// Read skill file
-const content = await manager.readSkillFile('skill-name', 'SKILL.md');
+// Import skill (from zip file)
+await manager.importSkill('/path/to/skill.zip');
+```
 
-// Write skill file
-await manager.writeSkillFile('skill-name', 'references/doc.md', 'content');
+### Skill Copy, Rename & Archive
 
-// Delete skill file
-await manager.deleteSkillFile('skill-name', 'references/old-doc.md');
+```typescript
+// Copy skill (auto-add random suffix)
+const newSkillName = await manager.copySkill('skill-name');
 
-// Upload file to skill directory
-await manager.uploadSkillFile('skill-name', 'assets/image.png', fileBuffer);
+// Rename skill
+await manager.renameSkill('old-name', 'new-name');
+
+// Archive skill (move to .archived directory)
+await manager.archiveSkill('skill-name');
+
+// Restore archived skill
+await manager.unarchiveSkill('archived-skill-abc12345');
+```
+
+### View Skill Content & Structure
+
+```typescript
+// View online skill content (complete SKILL.md)
+const content = await manager.getOnlineSkillContent('skill-name');
+
+// View archived skill content
+const archivedContent = await manager.getArchivedSkillContent('archived-skill-abc12345');
+
+// Get online skill file directory structure
+const structure = await manager.getOnlineSkillStructure('skill-name');
+
+// Get archived skill file directory structure
+const archivedStructure = await manager.getArchivedSkillStructure('archived-skill-abc12345');
+```
+
+### Export Skills
+
+```typescript
+// Export online skill to zip file
+const zipPath = await manager.exportSkill('skill-name', false);
+
+// Export archived skill to zip file
+const archivedZipPath = await manager.exportSkill('archived-skill-abc12345', true);
 ```
 
 ---
@@ -205,8 +235,8 @@ import { Agent, createSkillsTool, SkillsManager } from '@shareai-lab/kode-sdk';
 
 const deps = createDependencies();
 
-// Create Skills manager
-const skillsManager = new SkillsManager('./skills');
+// Create Skills manager (default uses .skills directory)
+const skillsManager = new SkillsManager('./.skills');
 
 // Register Skills tool
 const skillsTool = createSkillsTool(skillsManager);
@@ -247,12 +277,15 @@ Agent: Code formatting skill loaded. Now I can help you format code.
 ### 2. Whitelist Management
 
 ```typescript
-// Production: use whitelist
+// Production: use whitelist to limit loaded skills
 const allowedSkills = ['safe-skill-1', 'safe-skill-2'];
-const manager = new SkillsManager('./skills', allowedSkills);
+const manager = new SkillsManager('./.skills', allowedSkills);
 
 // Development: load all skills
-const devManager = new SkillsManager('./skills');
+const devManager = new SkillsManager('./.skills', ['*']);
+
+// Production: fully disable skills feature
+const disabledManager = new SkillsManager('./.skills', ['/*/']);
 ```
 
 ### 3. Error Handling

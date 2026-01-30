@@ -2,6 +2,17 @@
 
 KODE SDK 提供完整的 Skills 系统，支持模块化、可重用的能力单元，使 Agent 能够动态加载和执行特定技能。
 
+> **⚠️ Breaking Changes - 重大变更**
+>
+> **默认 Skills 目录已从 `skills/` 更改为 `.skills/`**
+>
+> - 如果您未设置 `SKILLS_DIR` 环境变量，SkillsManager 现在将使用 `.skills/` 作为默认目录
+> - **影响范围**：所有未显式指定 skills 目录路径的代码
+> - **迁移方案**：
+>   - 方案 1：将现有的 `skills/` 目录重命名为 `.skills/`
+>   - 方案 2：设置环境变量 `SKILLS_DIR` 指向原目录（如 `export SKILLS_DIR=./skills`）
+>   - 方案 3：在代码中显式指定路径：`new SkillsManager('./skills')`
+
 ---
 
 ## 核心特性
@@ -11,14 +22,14 @@ KODE SDK 提供完整的 Skills 系统，支持模块化、可重用的能力单
 | **热重载** | Skills 代码修改后自动重新加载 |
 | **元数据注入** | 自动将技能描述注入到系统提示 |
 | **沙箱隔离** | 每个技能有独立的文件系统空间 |
-| **白名单机制** | 选择性加载特定技能 |
+| **白名单机制** | 选择性加载特定技能，支持 `["/*/"`](完全禁用) 和 `["*"]`(加载所有) 特殊配置 |
 
 ---
 
 ## 目录结构
 
 ```
-skills/
+.skills/
 ├── skill-name/              # 技能目录
 │   ├── SKILL.md            # 技能定义（必需）
 │   ├── metadata.json       # 技能元数据（可选）
@@ -69,17 +80,17 @@ skills/
 <!-- tabs:start -->
 #### **Linux / macOS**
 ```bash
-export SKILLS_DIR=/path/to/skills
+export SKILLS_DIR=/path/to/.skills
 ```
 
 #### **Windows (PowerShell)**
 ```powershell
-$env:SKILLS_DIR="/path/to/skills"
+$env:SKILLS_DIR="C:\path\to\.skills"
 ```
 
 #### **Windows (CMD)**
 ```cmd
-set SKILLS_DIR=/path/to/skills
+set SKILLS_DIR=C:\path\to\.skills
 ```
 <!-- tabs:end -->
 
@@ -96,7 +107,7 @@ import { SkillsManager } from '@shareai-lab/kode-sdk';
 
 // 创建 Skills 管理器
 const skillsManager = new SkillsManager(
-  './skills',           // 技能目录路径
+  './.skills',          // 技能目录路径（默认为 .skills）
   ['skill1', 'skill2']  // 可选：白名单
 );
 
@@ -130,68 +141,87 @@ await skillsManager.getSkillsMetadata();  // 扫描2，获取最新数据
 
 ```typescript
 // 只加载白名单中的技能
-const manager = new SkillsManager('./skills', ['allowed-skill-1', 'allowed-skill-2']);
+const manager = new SkillsManager('./.skills', ['allowed-skill-1', 'allowed-skill-2']);
 const skills = await manager.getSkillsMetadata();
 // 只返回白名单中的技能
+
+// 特殊配置：加载所有技能
+const managerAll = new SkillsManager('./.skills', ['*']);
+
+// 特殊配置：完全禁用技能功能
+const managerDisabled = new SkillsManager('./.skills', ['/*/']);
 ```
 
 ---
 
-## SkillsManagementManager（CRUD 操作）
+## SkillsManagementManager（管理操作）
 
-SkillsManagementManager 提供技能的 CRUD 操作，包括创建、更新、归档等。
+SkillsManagementManager 提供技能的完整管理操作，包括安装、导入、导出、归档等。
 
 ### 基本操作
 
 ```typescript
 import { SkillsManagementManager } from '@shareai-lab/kode-sdk';
 
-const manager = new SkillsManagementManager('./skills');
+const manager = new SkillsManagementManager('./.skills');
 
 // 列出所有在线技能
 const skills = await manager.listSkills();
 
-// 获取技能详细信息
-const skillDetail = await manager.getSkillInfo('skill-name');
-
-// 创建新技能
-await manager.createSkill('new-skill', {
-  description: '新技能描述',
-  content: '# 新技能\n\n详细内容...'
-});
-
-// 更新技能
-await manager.updateSkill('skill-name', {
-  content: '# 更新后的内容'
-});
-
-// 删除技能（移动到归档）
-await manager.deleteSkill('skill-name');
-
 // 列出已归档技能
 const archived = await manager.listArchivedSkills();
-
-// 恢复已归档技能
-await manager.restoreSkill('archived-skill');
 ```
 
-### 文件操作
+### 技能安装与导入
 
 ```typescript
-// 获取技能文件树
-const files = await manager.getSkillFileTree('skill-name');
+// 安装技能（从 GitHub 仓库、Git URL 或在线技能库）
+await manager.installSkill('github:user/repo');
 
-// 读取技能文件
-const content = await manager.readSkillFile('skill-name', 'SKILL.md');
+// 导入技能（从 zip 文件）
+await manager.importSkill('/path/to/skill.zip');
+```
 
-// 写入技能文件
-await manager.writeSkillFile('skill-name', 'references/doc.md', '内容');
+### 技能复制、重命名与归档
 
-// 删除技能文件
-await manager.deleteSkillFile('skill-name', 'references/old-doc.md');
+```typescript
+// 复制技能（自动添加随机后缀）
+const newSkillName = await manager.copySkill('skill-name');
 
-// 上传文件到技能目录
-await manager.uploadSkillFile('skill-name', 'assets/image.png', fileBuffer);
+// 重命名技能
+await manager.renameSkill('old-name', 'new-name');
+
+// 归档技能（移动到 .archived 目录）
+await manager.archiveSkill('skill-name');
+
+// 恢复已归档技能
+await manager.unarchiveSkill('archived-skill-abc12345');
+```
+
+### 查看技能内容与结构
+
+```typescript
+// 查看在线技能内容（SKILL.md 完整内容）
+const content = await manager.getOnlineSkillContent('skill-name');
+
+// 查看归档技能内容
+const archivedContent = await manager.getArchivedSkillContent('archived-skill-abc12345');
+
+// 获取在线技能文件目录结构
+const structure = await manager.getOnlineSkillStructure('skill-name');
+
+// 获取归档技能文件目录结构
+const archivedStructure = await manager.getArchivedSkillStructure('archived-skill-abc12345');
+```
+
+### 导出技能
+
+```typescript
+// 导出在线技能到 zip 文件
+const zipPath = await manager.exportSkill('skill-name', false);
+
+// 导出归档技能到 zip 文件
+const archivedZipPath = await manager.exportSkill('archived-skill-abc12345', true);
 ```
 
 ---
@@ -205,8 +235,8 @@ import { Agent, createSkillsTool, SkillsManager } from '@shareai-lab/kode-sdk';
 
 const deps = createDependencies();
 
-// 创建 Skills 管理器
-const skillsManager = new SkillsManager('./skills');
+// 创建 Skills 管理器（默认使用 .skills 目录）
+const skillsManager = new SkillsManager('./.skills');
 
 // 注册 Skills 工具
 const skillsTool = createSkillsTool(skillsManager);
@@ -247,12 +277,15 @@ Agent: 已加载代码格式化技能。现在我可以帮你格式化代码了�
 ### 2. 白名单管理
 
 ```typescript
-// 生产环境使用白名单
+// 生产环境：使用白名单限制加载的技能
 const allowedSkills = ['safe-skill-1', 'safe-skill-2'];
-const manager = new SkillsManager('./skills', allowedSkills);
+const manager = new SkillsManager('./.skills', allowedSkills);
 
-// 开发环境加载所有技能
-const devManager = new SkillsManager('./skills');
+// 开发环境：加载所有技能
+const devManager = new SkillsManager('./.skills', ['*']);
+
+// 生产环境：完全禁用技能功能
+const disabledManager = new SkillsManager('./.skills', ['/*/']);
 ```
 
 ### 3. 错误处理

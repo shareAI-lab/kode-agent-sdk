@@ -142,6 +142,7 @@ See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detai
 | **Guides** | |
 | [Events](./docs/en/guides/events.md) | Three-channel event system |
 | [Tools](./docs/en/guides/tools.md) | Built-in tools & custom tools |
+| [Skills](./docs/en/guides/skills.md) | Skills system for reusable prompts |
 | [Providers](./docs/en/guides/providers.md) | Model provider configuration |
 | [Database](./docs/en/guides/database.md) | SQLite/PostgreSQL persistence |
 | [Resume & Fork](./docs/en/guides/resume-fork.md) | Crash recovery & branching |

@@ -65,16 +65,18 @@ const agent = await Agent.create({
 
 ### Skills Tool
 
+> **⚠️ Note**: Default Skills directory has changed from `skills/` to `.skills/`. See [Skills System Guide - Breaking Changes](./skills.md#breaking-changes)
+
 - `skills`: Load specific skill content (instructions, references, scripts, assets)
   - **Parameters**:
-    - `action`: Operation type (currently only `load`)
+    - `action`: Operation type (currently only `load`, `list` operation is disabled)
     - `skill_name`: Skill name (required when action=load)
   - **Returns**:
     ```typescript
     {
       ok: true,
       data: {
-        name: string,           // Skill name
+        name: string,           // Skill name (folder name)
         description: string,    // Skill description
         content: string,        // SKILL.md content
         base_dir: string,       // Skill base directory

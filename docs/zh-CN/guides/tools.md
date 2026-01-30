@@ -65,16 +65,18 @@ const agent = await Agent.create({
 
 ### Skills 工具
 
+> **⚠️ 注意**：默认 Skills 目录已从 `skills/` 更改为 `.skills/`，详见 [Skills 系统指南 - Breaking Changes](./skills.md#breaking-changes)
+
 - `skills`：加载特定技能的详细内容（包含指令、references、scripts、assets）
   - **参数**：
-    - `action`：操作类型（目前仅支持 `load`）
+    - `action`：操作类型（目前仅支持 `load`，`list` 操作已禁用）
     - `skill_name`：技能名称（当 action=load 时必需）
   - **返回**：
     ```typescript
     {
       ok: true,
       data: {
-        name: string,           // 技能名称
+        name: string,           // 技能名称（文件夹名称）
         description: string,    // 技能描述
         content: string,        // SKILL.md 内容
         base_dir: string,       // 技能基础目录
