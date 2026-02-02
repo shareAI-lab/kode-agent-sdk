@@ -355,7 +355,7 @@ export class Agent {
 
     const sandbox = typeof config.sandbox === 'object' && 'exec' in config.sandbox
       ? (config.sandbox as Sandbox)
-      : deps.sandboxFactory.create(sandboxConfig || { kind: 'local', workDir: process.cwd() });
+      : await deps.sandboxFactory.createAsync(sandboxConfig || { kind: 'local', workDir: process.cwd() });
 
     const model = config.model
       ? config.model
@@ -747,7 +747,7 @@ export class Agent {
 
     let sandbox: Sandbox;
     try {
-      sandbox = deps.sandboxFactory.create(metadata.sandboxConfig || { kind: 'local', workDir: process.cwd() });
+      sandbox = await deps.sandboxFactory.createAsync(metadata.sandboxConfig || { kind: 'local', workDir: process.cwd() });
     } catch (error: any) {
       throw new ResumeError('SANDBOX_INIT_FAILED', error?.message || 'Failed to create sandbox');
     }
