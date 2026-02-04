@@ -9,7 +9,7 @@
  * - Function calling
  */
 
-import { Message, ContentBlock, ImageContentBlock, FileContentBlock } from '../../core/types';
+import { Message, ContentBlock, ImageContentBlock, FileContentBlock, AudioContentBlock, VideoContentBlock } from '../../core/types';
 import {
   ModelProvider,
   ModelResponse,
@@ -32,9 +32,12 @@ import {
   safeJsonStringify,
   buildGeminiImagePart,
   buildGeminiFilePart,
+  buildGeminiAudioPart,
+  buildGeminiVideoPart,
   sanitizeGeminiSchema,
   IMAGE_UNSUPPORTED_TEXT,
   AUDIO_UNSUPPORTED_TEXT,
+  VIDEO_UNSUPPORTED_TEXT,
   FILE_UNSUPPORTED_TEXT,
 } from './utils';
 
@@ -80,14 +83,26 @@ export class GeminiProvider implements ModelProvider {
   }
 
   async uploadFile(input: UploadFileInput): Promise<UploadFileResult | null> {
-    if (input.kind !== 'file') {
+    // Gemini supports uploading audio, video, and file types
+    if (input.kind !== 'file' && input.kind !== 'audio' && input.kind !== 'video') {
       return null;
     }
     const url = new URL(`${this.baseUrl}/files`);
     url.searchParams.set('key', this.apiKey);
+
+    // Determine display name based on kind
+    let defaultFilename: string;
+    if (input.kind === 'audio') {
+      defaultFilename = 'audio.wav';
+    } else if (input.kind === 'video') {
+      defaultFilename = 'video.mp4';
+    } else {
+      defaultFilename = 'file.pdf';
+    }
+
     const body = {
       file: {
-        display_name: input.filename || 'file.pdf',
+        display_name: input.filename || defaultFilename,
         mime_type: input.mimeType,
       },
       content: input.data.toString('base64'),
@@ -475,8 +490,21 @@ export class GeminiProvider implements ModelProvider {
             parts.push({ text: IMAGE_UNSUPPORTED_TEXT });
           }
         } else if (block.type === 'audio') {
-          degraded = true;
-          parts.push({ text: AUDIO_UNSUPPORTED_TEXT });
+          const audioPart = buildGeminiAudioPart(block);
+          if (audioPart) {
+            parts.push(audioPart);
+          } else {
+            degraded = true;
+            parts.push({ text: AUDIO_UNSUPPORTED_TEXT });
+          }
+        } else if (block.type === 'video') {
+          const videoPart = buildGeminiVideoPart(block);
+          if (videoPart) {
+            parts.push(videoPart);
+          } else {
+            degraded = true;
+            parts.push({ text: VIDEO_UNSUPPORTED_TEXT });
+          }
         } else if (block.type === 'file') {
           const filePart = buildGeminiFilePart(block);
           if (filePart) {

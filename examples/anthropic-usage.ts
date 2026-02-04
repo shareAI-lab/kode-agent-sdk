@@ -41,7 +41,32 @@ function requireApiKey(value?: string): string {
 }
 
 const sandboxConfig = { kind: 'local', workDir: '.', enforceBoundary: true, watchFiles: false } as const;
-const multimodalConfig = { mode: 'url+base64', maxBase64Bytes: 20000000 } as const;
+const multimodalConfig = {
+  mode: 'url+base64',
+  maxBase64Bytes: 20000000,
+  audio: {
+    // Anthropic doesn't support audio natively; this callback transcribes audio to text.
+    // In production, call Whisper API or another STT service here.
+    customTranscriber: async (audio: { base64?: string; url?: string; mimeType?: string }) => {
+      console.log('[info] customTranscriber called — returning placeholder transcription');
+      // Replace with real STT implementation, e.g.:
+      // const resp = await openai.audio.transcriptions.create({ file: ..., model: 'whisper-1' });
+      // return resp.text;
+      return '[Placeholder transcription — integrate your STT service here]';
+    },
+  },
+  video: {
+    // Anthropic doesn't support video natively; this callback extracts frames as images.
+    // In production, use ffmpeg or a video processing library to extract key frames.
+    customFrameExtractor: async (video: { base64?: string; url?: string; mimeType?: string }) => {
+      console.log('[info] customFrameExtractor called — extracting placeholder frames');
+      if (video.base64) {
+        return [{ base64: video.base64, mimeType: 'image/jpeg' }];
+      }
+      return [];
+    },
+  },
+} as const;
 
 type ErrorTracker = ReturnType<typeof createErrorTracker>;
 
@@ -239,7 +264,9 @@ async function main() {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   console.log('Enter a message. Type /exit to quit.');
-  console.log('Use "读取 <path>" or "read <path>" to load a local PDF/image.');
+  console.log('Use "读取 <path>" or "read <path>" to load a local PDF/image/audio/video.');
+  console.log('  Audio: auto-transcribed via customTranscriber callback (Whisper, etc.)');
+  console.log('  Video: auto-degraded to extracted frames via customFrameExtractor callback');
   console.log('Optional prompt: "读取 <path> | <prompt>" or "读取 <path>，<prompt>" or "read <path> <prompt>".');
   while (true) {
     const input = (await rl.question('> ')).trim();
@@ -260,12 +287,28 @@ async function main() {
           file.prompt ??
           (file.kind === 'pdf'
             ? 'Summarize the PDF in 3 bullet points.'
+            : file.kind === 'audio'
+            ? 'Describe or transcribe this audio.'
+            : file.kind === 'video'
+            ? 'Describe what happens in this video.'
             : 'Describe the image in one sentence.');
         const blocks: ContentBlock[] = [{ type: 'text', text: prompt }];
 
         if (file.kind === 'image') {
           blocks.push({
             type: 'image',
+            base64: file.data.toString('base64'),
+            mime_type: file.mimeType,
+          });
+        } else if (file.kind === 'audio') {
+          blocks.push({
+            type: 'audio',
+            base64: file.data.toString('base64'),
+            mime_type: file.mimeType,
+          });
+        } else if (file.kind === 'video') {
+          blocks.push({
+            type: 'video',
             base64: file.data.toString('base64'),
             mime_type: file.mimeType,
           });

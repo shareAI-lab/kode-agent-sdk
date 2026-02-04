@@ -2,7 +2,7 @@
  * Shared utilities for provider implementations.
  */
 
-import { ContentBlock, Message, ImageContentBlock, FileContentBlock } from '../../core/types';
+import { ContentBlock, Message, ImageContentBlock, FileContentBlock, AudioContentBlock, VideoContentBlock } from '../../core/types';
 import { ReasoningTransport } from './types';
 
 // =============================================================================
@@ -142,6 +142,8 @@ export const IMAGE_UNSUPPORTED_TEXT =
   '[image unsupported] This model does not support image URLs; please provide base64 data if supported.';
 export const AUDIO_UNSUPPORTED_TEXT =
   '[audio unsupported] This model does not support audio input; please provide a text transcript instead.';
+export const VIDEO_UNSUPPORTED_TEXT =
+  '[video unsupported] This model does not support video input; please provide text description or extracted frames instead.';
 
 // =============================================================================
 // Reasoning/Thinking Utilities
@@ -277,6 +279,85 @@ export function buildGeminiFilePart(block: FileContentBlock): any | null {
     return { inline_data: { mime_type: mimeType, data: block.base64 } };
   }
   return null;
+}
+
+export function buildGeminiAudioPart(block: AudioContentBlock): any | null {
+  const mimeType = block.mime_type || 'audio/wav';
+  if (block.file_id) {
+    return { file_data: { mime_type: mimeType, file_uri: block.file_id } };
+  }
+  if (block.url) {
+    if (block.url.startsWith('gs://')) {
+      return { file_data: { mime_type: mimeType, file_uri: block.url } };
+    }
+    // Gemini supports https URLs for audio via file_data
+    return { file_data: { mime_type: mimeType, file_uri: block.url } };
+  }
+  if (block.base64) {
+    return { inline_data: { mime_type: mimeType, data: block.base64 } };
+  }
+  return null;
+}
+
+export function buildGeminiVideoPart(block: VideoContentBlock): any | null {
+  const mimeType = block.mime_type || 'video/mp4';
+  if (block.file_id) {
+    return { file_data: { mime_type: mimeType, file_uri: block.file_id } };
+  }
+  if (block.url) {
+    if (block.url.startsWith('gs://')) {
+      return { file_data: { mime_type: mimeType, file_uri: block.url } };
+    }
+    // Gemini supports https URLs for video via file_data
+    return { file_data: { mime_type: mimeType, file_uri: block.url } };
+  }
+  if (block.base64) {
+    return { inline_data: { mime_type: mimeType, data: block.base64 } };
+  }
+  return null;
+}
+
+// =============================================================================
+// OpenAI Audio Helpers
+// =============================================================================
+
+/** Supported OpenAI audio formats */
+export const OPENAI_SUPPORTED_AUDIO_FORMATS = ['wav', 'mp3'] as const;
+export type OpenAIAudioFormat = (typeof OPENAI_SUPPORTED_AUDIO_FORMATS)[number];
+
+/**
+ * Extract and validate OpenAI audio format from MIME type.
+ * OpenAI Chat Completions API only supports wav and mp3.
+ * @returns The audio format if supported, null otherwise
+ */
+export function extractOpenAIAudioFormat(mimeType?: string): OpenAIAudioFormat | null {
+  if (!mimeType) return null;
+  const lower = mimeType.toLowerCase();
+  if (lower === 'audio/wav' || lower === 'audio/x-wav' || lower === 'audio/wave') {
+    return 'wav';
+  }
+  if (lower === 'audio/mpeg' || lower === 'audio/mp3') {
+    return 'mp3';
+  }
+  return null;
+}
+
+/**
+ * Build OpenAI input_audio content part from AudioContentBlock.
+ * OpenAI only supports base64 encoded audio (no URLs).
+ * @returns The OpenAI input_audio part or null if not supported
+ */
+export function buildOpenAIAudioPart(block: AudioContentBlock): any | null {
+  const format = extractOpenAIAudioFormat(block.mime_type);
+  if (!format) return null;
+  if (!block.base64) return null;
+  return {
+    type: 'input_audio',
+    input_audio: {
+      data: block.base64,
+      format,
+    },
+  };
 }
 
 export function sanitizeGeminiSchema(schema: any): any {

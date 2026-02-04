@@ -3,7 +3,7 @@ import path from 'node:path';
 
 export type LocalMultimodalFile = {
   path: string;
-  kind: 'image' | 'pdf';
+  kind: 'image' | 'pdf' | 'audio' | 'video';
   mimeType: string;
   filename: string;
   data: Buffer;
@@ -97,6 +97,47 @@ export function loadLocalFile(command: { path: string; prompt?: string }): Local
       path: resolved,
       kind: 'image',
       mimeType,
+      filename,
+      data,
+      prompt: command.prompt,
+    };
+  }
+
+  const audioMimes: Record<string, string> = {
+    '.mp3': 'audio/mp3',
+    '.wav': 'audio/wav',
+    '.ogg': 'audio/ogg',
+    '.flac': 'audio/flac',
+    '.m4a': 'audio/mp4',
+    '.aac': 'audio/aac',
+    '.wma': 'audio/x-ms-wma',
+    '.mpeg': 'audio/mpeg',
+  };
+  if (audioMimes[ext]) {
+    return {
+      path: resolved,
+      kind: 'audio',
+      mimeType: audioMimes[ext],
+      filename,
+      data,
+      prompt: command.prompt,
+    };
+  }
+
+  const videoMimes: Record<string, string> = {
+    '.mp4': 'video/mp4',
+    '.webm': 'video/webm',
+    '.avi': 'video/x-msvideo',
+    '.mov': 'video/quicktime',
+    '.mkv': 'video/x-matroska',
+    '.wmv': 'video/x-ms-wmv',
+    '.flv': 'video/x-flv',
+  };
+  if (videoMimes[ext]) {
+    return {
+      path: resolved,
+      kind: 'video',
+      mimeType: videoMimes[ext],
       filename,
       data,
       prompt: command.prompt,

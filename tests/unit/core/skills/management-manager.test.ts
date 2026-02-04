@@ -1,11 +1,21 @@
 /**
  * SkillsManagementManager 单元测试
+ *
+ * 测试新 API：
+ * - listSkills() - 列出在线技能
+ * - listArchivedSkills() - 列出归档技能
+ * - copySkill() - 复制技能
+ * - renameSkill() - 重命名技能
+ * - archiveSkill() - 归档技能
+ * - unarchiveSkill() - 恢复归档技能
+ * - getOnlineSkillContent() - 获取技能内容
+ * - getOnlineSkillStructure() - 获取技能目录结构
+ * - exportSkill() - 导出技能
  */
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { SkillsManagementManager } from '../../../../src/core/skills/management-manager';
-import { SandboxFactory } from '../../../../src/infra/sandbox-factory';
 import { TestRunner, expect } from '../../../helpers/utils';
 import { TEST_ROOT } from '../../../helpers/fixtures';
 
@@ -14,286 +24,258 @@ const runner = new TestRunner('SkillsManagementManager');
 let testSkillsDir: string;
 let manager: SkillsManagementManager;
 
+/**
+ * 手动创建技能（模拟导入后的结果）
+ */
+async function createTestSkill(
+  skillsDir: string,
+  skillName: string,
+  options: { description?: string } = {}
+): Promise<void> {
+  const skillDir = path.join(skillsDir, skillName);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.mkdir(path.join(skillDir, 'references'), { recursive: true });
+  await fs.mkdir(path.join(skillDir, 'scripts'), { recursive: true });
+  await fs.mkdir(path.join(skillDir, 'assets'), { recursive: true });
+
+  const skillMdContent = `---
+name: ${skillName}
+description: ${options.description || 'Test skill'}
+---
+
+# ${skillName}
+
+This is a test skill.
+`;
+  await fs.writeFile(path.join(skillDir, 'SKILL.md'), skillMdContent);
+}
+
 runner.beforeAll(async () => {
-  // 创建临时skills目录
   testSkillsDir = path.join(TEST_ROOT, 'skills-management');
   await fs.mkdir(testSkillsDir, { recursive: true });
-
-  // 创建SkillsManagementManager实例
-  manager = new SkillsManagementManager(testSkillsDir, new SandboxFactory());
+  // 新 API：构造函数只接受 skillsDir 和可选的 archivedDir
+  manager = new SkillsManagementManager(testSkillsDir);
 });
 
 runner.afterAll(async () => {
-  // 清理测试目录
   await fs.rm(testSkillsDir, { recursive: true, force: true });
 });
 
 runner.beforeEach(async () => {
-  // 每个测试前清理测试目录
   await fs.rm(testSkillsDir, { recursive: true, force: true });
   await fs.mkdir(testSkillsDir, { recursive: true });
+  // 重新创建 manager 实例
+  manager = new SkillsManagementManager(testSkillsDir);
 });
 
 runner
-  .test('创建新技能', async () => {
-    const skillName = 'test-skill';
-    const options = {
-      name: skillName,
-      description: 'A test skill',
-    };
+  .test('列出在线技能', async () => {
+    // 手动创建多个技能
+    await createTestSkill(testSkillsDir, 'skill1', { description: 'First skill' });
+    await createTestSkill(testSkillsDir, 'skill2', { description: 'Second skill' });
 
-    // 创建技能
-    const skillDetail = await manager.createSkill(skillName, options);
+    const skills = await manager.listSkills();
 
-    // 验证技能已创建
-    expect.toEqual(skillDetail.name, skillName);
-    expect.toEqual(skillDetail.description, 'A test skill');
-    expect.toBeTruthy(skillDetail.baseDir);
-
-    // 验证目录结构
-    const skillDir = path.join(testSkillsDir, skillName);
-    const skillMdPath = path.join(skillDir, 'SKILL.md');
-    const referencesDir = path.join(skillDir, 'references');
-    const scriptsDir = path.join(skillDir, 'scripts');
-    const assetsDir = path.join(skillDir, 'assets');
-
-    expect.toBeTruthy(await fs.access(skillMdPath).then(() => true).catch(() => false));
-    expect.toBeTruthy(await fs.access(referencesDir).then(() => true).catch(() => false));
-    expect.toBeTruthy(await fs.access(scriptsDir).then(() => true).catch(() => false));
-    expect.toBeTruthy(await fs.access(assetsDir).then(() => true).catch(() => false));
-
-    // 验证SKILL.md内容
-    const content = await fs.readFile(skillMdPath, 'utf-8');
-    expect.toContain(content, `name: ${skillName}`);
-    expect.toContain(content, 'A test skill');
+    expect.toEqual(skills.length, 2);
+    const names = skills.map(s => s.name).sort();
+    expect.toEqual(names[0], 'skill1');
+    expect.toEqual(names[1], 'skill2');
   })
 
-  .test('拒绝创建无效名称的技能', async () => {
+  .test('列出技能时排除 .archived 目录', async () => {
+    await createTestSkill(testSkillsDir, 'online-skill', { description: 'Online' });
+
+    // 手动创建 .archived 目录中的技能
+    const archivedDir = path.join(testSkillsDir, '.archived');
+    await fs.mkdir(archivedDir, { recursive: true });
+    await createTestSkill(archivedDir, 'archived-skill-12345678', { description: 'Archived' });
+
+    const skills = await manager.listSkills();
+
+    expect.toEqual(skills.length, 1);
+    expect.toEqual(skills[0].name, 'online-skill');
+  })
+
+  .test('复制技能', async () => {
+    await createTestSkill(testSkillsDir, 'original-skill', { description: 'Original' });
+
+    const newSkillName = await manager.copySkill('original-skill');
+
+    // 验证新技能名称格式：{原名称}-{8位随机后缀}
+    expect.toBeTruthy(newSkillName.startsWith('original-skill-'));
+    expect.toEqual(newSkillName.length, 'original-skill-'.length + 8);
+
+    // 验证两个技能都存在
+    const skills = await manager.listSkills();
+    expect.toEqual(skills.length, 2);
+  })
+
+  .test('复制不存在的技能应抛出错误', async () => {
+    let errorThrown = false;
+    try {
+      await manager.copySkill('non-existent-skill');
+    } catch (error: any) {
+      errorThrown = true;
+      expect.toContain(error.message, '不存在');
+    }
+    expect.toBeTruthy(errorThrown, 'Should throw error for non-existent skill');
+  })
+
+  .test('重命名技能', async () => {
+    await createTestSkill(testSkillsDir, 'old-name', { description: 'Will be renamed' });
+
+    await manager.renameSkill('old-name', 'new-name');
+
+    const skills = await manager.listSkills();
+    expect.toEqual(skills.length, 1);
+    expect.toEqual(skills[0].folderName, 'new-name');
+
+    // 验证旧目录不存在
+    const oldExists = await fs.access(path.join(testSkillsDir, 'old-name')).then(() => true).catch(() => false);
+    expect.toBeFalsy(oldExists);
+
+    // 验证新目录存在
+    const newExists = await fs.access(path.join(testSkillsDir, 'new-name')).then(() => true).catch(() => false);
+    expect.toBeTruthy(newExists);
+  })
+
+  .test('重命名为无效名称应抛出错误', async () => {
+    await createTestSkill(testSkillsDir, 'valid-skill', { description: 'Test' });
+
     const invalidNames = [
-      'invalid name', // 包含空格
-      'invalid/name', // 包含斜杠
-      '../escape', // 路径穿越
-      '.hidden', // 以点开头
-      'a'.repeat(51), // 超过50字符
+      'Invalid Name',   // 包含空格和大写
+      'invalid/name',   // 包含斜杠
+      '-start-dash',    // 以连字符开头
+      'end-dash-',      // 以连字符结尾
     ];
 
     for (const invalidName of invalidNames) {
       let errorThrown = false;
       try {
-        await manager.createSkill(invalidName, { name: invalidName });
+        await manager.renameSkill('valid-skill', invalidName);
       } catch (error: any) {
         errorThrown = true;
-        expect.toContain(error.message.toLowerCase(), 'invalid');
       }
       expect.toBeTruthy(errorThrown, `Should reject invalid name: ${invalidName}`);
     }
   })
 
-  .test('拒绝创建已存在的技能', async () => {
-    const skillName = 'existing-skill';
+  .test('重命名为已存在的名称应抛出错误', async () => {
+    await createTestSkill(testSkillsDir, 'skill-a', { description: 'A' });
+    await createTestSkill(testSkillsDir, 'skill-b', { description: 'B' });
 
-    // 创建技能
-    await manager.createSkill(skillName, { name: skillName });
-
-    // 尝试再次创建同名技能
     let errorThrown = false;
     try {
-      await manager.createSkill(skillName, { name: skillName });
+      await manager.renameSkill('skill-a', 'skill-b');
     } catch (error: any) {
       errorThrown = true;
-      expect.toContain(error.message.toLowerCase(), 'already exists');
+      expect.toContain(error.message, '已存在');
     }
-
-    expect.toBeTruthy(errorThrown, 'Should reject duplicate skill name');
+    expect.toBeTruthy(errorThrown, 'Should reject duplicate name');
   })
 
-  .test('列出在线技能', async () => {
-    // 创建多个技能
-    await manager.createSkill('skill1', { name: 'skill1', description: 'First skill' });
-    await manager.createSkill('skill2', { name: 'skill2', description: 'Second skill' });
+  .test('归档技能', async () => {
+    await createTestSkill(testSkillsDir, 'to-archive', { description: 'Will be archived' });
 
-    // 列出技能
-    const skills = await manager.listSkills();
+    await manager.archiveSkill('to-archive');
 
-    expect.toEqual(skills.length, 2);
-    expect.toEqual(skills[0].name, 'skill1');
-    expect.toEqual(skills[1].name, 'skill2');
-  })
+    // 验证技能不在在线列表中
+    const onlineSkills = await manager.listSkills();
+    expect.toEqual(onlineSkills.length, 0);
 
-  .test('获取技能详细信息', async () => {
-    const skillName = 'detail-skill';
-    await manager.createSkill(skillName, { name: skillName, description: 'Test detail' });
-
-    // 获取详细信息
-    const detail = await manager.getSkillInfo(skillName);
-
-    expect.toBeTruthy(detail);
-    expect.toEqual(detail!.name, skillName);
-    expect.toEqual(detail!.description, 'Test detail');
-    expect.toBeTruthy(detail!.files);
-    expect.toBeTruthy(detail!.references);
-    expect.toBeTruthy(detail!.scripts);
-    expect.toBeTruthy(detail!.assets);
-  })
-
-  .test('重命名技能', async () => {
-    const oldName = 'old-skill';
-    const newName = 'new-skill';
-
-    await manager.createSkill(oldName, { name: oldName, description: 'Will be renamed' });
-
-    // 重命名
-    await manager.renameSkill(oldName, newName);
-
-    // 验证旧技能不存在（返回null）
-    const oldSkill = await manager.getSkillInfo(oldName);
-    expect.toBeFalsy(oldSkill, 'Old skill should not exist');
-
-    // 验证新技能存在
-    const newSkill = await manager.getSkillInfo(newName);
-    expect.toBeTruthy(newSkill);
-    expect.toEqual(newSkill!.name, newName);
-
-    // 验证SKILL.md中的name已更新
-    const skillMdPath = path.join(testSkillsDir, newName, 'SKILL.md');
-    const content = await fs.readFile(skillMdPath, 'utf-8');
-    expect.toContain(content, `name: ${newName}`);
-  })
-
-  .test('编辑技能文件', async () => {
-    const skillName = 'edit-skill';
-    await manager.createSkill(skillName, { name: skillName });
-
-    const newContent = `---
-name: ${skillName}
-description: Updated description
----
-
-# Updated Content
-
-This is the updated content of SKILL.md.
-`;
-
-    // 编辑SKILL.md
-    await manager.editSkillFile(skillName, 'SKILL.md', newContent, true);
-
-    // 验证内容已更新
-    const skillMdPath = path.join(testSkillsDir, skillName, 'SKILL.md');
-    const content = await fs.readFile(skillMdPath, 'utf-8');
-    expect.toEqual(content, newContent);
-  })
-
-  .test('拒绝编辑archived技能', async () => {
-    const skillName = 'to-archive-skill';
-    await manager.createSkill(skillName, { name: skillName });
-
-    // 删除技能（移动到archived）
-    await manager.deleteSkill(skillName);
-
-    // 尝试编辑archived技能
-    let errorThrown = false;
-    try {
-      await manager.editSkillFile(skillName, 'SKILL.md', 'new content', true);
-    } catch (error: any) {
-      errorThrown = true;
-      expect.toContain(error.message.toLowerCase(), 'archived');
-    }
-
-    expect.toBeTruthy(errorThrown, 'Should reject editing archived skill');
-  })
-
-  .test('删除技能（移动到archived）', async () => {
-    const skillName = 'delete-skill';
-    await manager.createSkill(skillName, { name: skillName });
-
-    // 删除技能
-    await manager.deleteSkill(skillName);
-
-    // 验证技能不再在线
-    let errorThrown = false;
-    try {
-      await manager.getSkillInfo(skillName);
-    } catch (error: any) {
-      errorThrown = true;
-    }
-    expect.toBeTruthy(errorThrown, 'Skill should not be online');
-
-    // 验证技能在archived中
+    // 验证技能在归档列表中
     const archivedSkills = await manager.listArchivedSkills();
-    expect.toBeTruthy(archivedSkills.length > 0);
-    expect.toEqual(archivedSkills[0].originalName, skillName);
+    expect.toEqual(archivedSkills.length, 1);
+    expect.toEqual(archivedSkills[0].originalName, 'to-archive');
 
-    // 验证archived目录存在（注意：使用 .archived 而非 archived）
+    // 验证归档目录存在
     const archivedDir = path.join(testSkillsDir, '.archived');
-    expect.toBeTruthy(await fs.access(archivedDir).then(() => true).catch(() => false));
+    const exists = await fs.access(archivedDir).then(() => true).catch(() => false);
+    expect.toBeTruthy(exists);
   })
 
-  .test('恢复archived技能', async () => {
-    const skillName = 'restore-skill';
-    await manager.createSkill(skillName, { name: skillName, description: 'To be restored' });
+  .test('恢复归档技能', async () => {
+    await createTestSkill(testSkillsDir, 'to-restore', { description: 'Will be restored' });
+    await manager.archiveSkill('to-restore');
 
-    // 删除技能
-    await manager.deleteSkill(skillName);
-
-    // 获取archived技能名称
+    // 获取归档技能名称
     const archivedSkills = await manager.listArchivedSkills();
-    expect.toBeTruthy(archivedSkills.length > 0);
+    expect.toEqual(archivedSkills.length, 1);
     const archivedName = archivedSkills[0].archivedName;
 
     // 恢复技能
-    await manager.restoreSkill(archivedName);
+    await manager.unarchiveSkill(archivedName);
 
-    // 验证技能已恢复
-    const restoredSkill = await manager.getSkillInfo(skillName);
-    expect.toBeTruthy(restoredSkill);
-    expect.toEqual(restoredSkill!.name, skillName);
+    // 验证技能回到在线列表
+    const onlineSkills = await manager.listSkills();
+    expect.toEqual(onlineSkills.length, 1);
+    expect.toEqual(onlineSkills[0].folderName, 'to-restore');
 
-    // 验证archived列表为空
+    // 验证归档列表为空
     const newArchivedSkills = await manager.listArchivedSkills();
     expect.toEqual(newArchivedSkills.length, 0);
   })
 
-  .test('列出archived技能', async () => {
-    // 创建并删除多个技能
-    await manager.createSkill('skill1', { name: 'skill1' });
-    await manager.createSkill('skill2', { name: 'skill2' });
+  .test('恢复时目标已存在应抛出错误', async () => {
+    await createTestSkill(testSkillsDir, 'conflict-skill', { description: 'Original' });
+    await manager.archiveSkill('conflict-skill');
 
-    await manager.deleteSkill('skill1');
-    await new Promise(resolve => setTimeout(resolve, 10)); // 确保时间戳不同
-    await manager.deleteSkill('skill2');
+    // 重新创建同名技能
+    await createTestSkill(testSkillsDir, 'conflict-skill', { description: 'New' });
 
-    // 列出archived技能
+    // 获取归档技能名称
     const archivedSkills = await manager.listArchivedSkills();
+    const archivedName = archivedSkills[0].archivedName;
 
-    expect.toEqual(archivedSkills.length, 2);
-    expect.toEqual(archivedSkills[0].originalName, 'skill2'); // 最新删除的在前
-    expect.toEqual(archivedSkills[1].originalName, 'skill1');
-
-    // 验证字段
-    expect.toBeTruthy(archivedSkills[0].archivedName);
-    expect.toBeTruthy(archivedSkills[0].archivedPath);
-    expect.toBeTruthy(archivedSkills[0].archivedAt);
+    // 尝试恢复（应该失败）
+    let errorThrown = false;
+    try {
+      await manager.unarchiveSkill(archivedName);
+    } catch (error: any) {
+      errorThrown = true;
+      expect.toContain(error.message, '已存在');
+    }
+    expect.toBeTruthy(errorThrown, 'Should reject restore when target exists');
   })
 
-  .test('获取技能文件树', async () => {
-    const skillName = 'filetree-skill';
-    await manager.createSkill(skillName, { name: skillName });
+  .test('获取在线技能内容', async () => {
+    await createTestSkill(testSkillsDir, 'content-skill', { description: 'Content test' });
 
-    // 添加一些额外文件
-    const skillDir = path.join(testSkillsDir, skillName);
-    await fs.writeFile(path.join(skillDir, 'test.txt'), 'test');
-    await fs.writeFile(path.join(skillDir, 'references', 'ref1.txt'), 'ref1');
-    await fs.writeFile(path.join(skillDir, 'scripts', 'script1.sh'), '#!/bin/bash');
+    const content = await manager.getOnlineSkillContent('content-skill');
 
-    // 获取文件树
-    const fileTree = await manager.getSkillFileTree(skillName);
+    expect.toContain(content, 'name: content-skill');
+    expect.toContain(content, 'description: Content test');
+    expect.toContain(content, '# content-skill');
+  })
 
-    expect.toEqual(fileTree.name, '.');
-    expect.toEqual(fileTree.type, 'dir');
-    expect.toBeTruthy(fileTree.children);
+  .test('获取不存在技能的内容应抛出错误', async () => {
+    let errorThrown = false;
+    try {
+      await manager.getOnlineSkillContent('non-existent');
+    } catch (error: any) {
+      errorThrown = true;
+      expect.toContain(error.message, '不存在');
+    }
+    expect.toBeTruthy(errorThrown, 'Should throw for non-existent skill');
+  })
+
+  .test('获取在线技能目录结构', async () => {
+    await createTestSkill(testSkillsDir, 'structure-skill', { description: 'Structure test' });
+
+    // 添加额外文件
+    const skillDir = path.join(testSkillsDir, 'structure-skill');
+    await fs.writeFile(path.join(skillDir, 'test.txt'), 'test content');
+    await fs.writeFile(path.join(skillDir, 'references', 'ref1.md'), '# Reference');
+
+    const structure = await manager.getOnlineSkillStructure('structure-skill') as any;
+
+    expect.toEqual(structure.name, 'structure-skill');
+    expect.toEqual(structure.type, 'directory');
+    expect.toBeTruthy(structure.children);
+    expect.toBeTruthy(Array.isArray(structure.children));
 
     // 验证包含预期的文件和目录
-    const names = fileTree.children!.map(c => c.name);
+    const names = structure.children.map((c: any) => c.name);
     expect.toContain(names, 'SKILL.md');
     expect.toContain(names, 'test.txt');
     expect.toContain(names, 'references');
@@ -301,12 +283,52 @@ This is the updated content of SKILL.md.
     expect.toContain(names, 'assets');
   })
 
-  .test('队列状态查询', async () => {
-    const status = manager.getQueueStatus();
+  .test('列出归档技能', async () => {
+    await createTestSkill(testSkillsDir, 'archive1', { description: 'Archive 1' });
+    await createTestSkill(testSkillsDir, 'archive2', { description: 'Archive 2' });
 
-    expect.toBeTruthy(typeof status.length === 'number');
-    expect.toBeTruthy(typeof status.processing === 'boolean');
-    expect.toBeTruthy(Array.isArray(status.tasks));
+    await manager.archiveSkill('archive1');
+    await new Promise(resolve => setTimeout(resolve, 10)); // 确保时间戳不同
+    await manager.archiveSkill('archive2');
+
+    const archivedSkills = await manager.listArchivedSkills();
+
+    expect.toEqual(archivedSkills.length, 2);
+
+    // 验证字段存在
+    expect.toBeTruthy(archivedSkills[0].originalName);
+    expect.toBeTruthy(archivedSkills[0].archivedName);
+    expect.toBeTruthy(archivedSkills[0].archivedPath);
+    expect.toBeTruthy(archivedSkills[0].archivedAt);
+  })
+
+  .test('.archived 目录不存在时返回空数组', async () => {
+    const archivedSkills = await manager.listArchivedSkills();
+    expect.toEqual(archivedSkills.length, 0);
+  })
+
+  .test('自定义归档目录', async () => {
+    const customArchivedDir = path.join(TEST_ROOT, 'custom-archived');
+    await fs.mkdir(customArchivedDir, { recursive: true });
+
+    try {
+      const customManager = new SkillsManagementManager(testSkillsDir, customArchivedDir);
+
+      await createTestSkill(testSkillsDir, 'custom-archive-skill', { description: 'Custom' });
+      await customManager.archiveSkill('custom-archive-skill');
+
+      // 验证技能在自定义归档目录中
+      const entries = await fs.readdir(customArchivedDir);
+      expect.toBeTruthy(entries.length > 0);
+      expect.toBeTruthy(entries[0].startsWith('custom-archive-skill-'));
+
+      // 验证默认 .archived 目录不存在
+      const defaultArchived = path.join(testSkillsDir, '.archived');
+      const defaultExists = await fs.access(defaultArchived).then(() => true).catch(() => false);
+      expect.toBeFalsy(defaultExists);
+    } finally {
+      await fs.rm(customArchivedDir, { recursive: true, force: true });
+    }
   });
 
 export async function run() {

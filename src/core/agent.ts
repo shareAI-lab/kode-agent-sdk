@@ -1534,7 +1534,7 @@ export class Agent {
     ];
 
     for (const block of blocks) {
-      if (block.type === 'image' || block.type === 'audio' || block.type === 'file') {
+      if (block.type === 'image' || block.type === 'audio' || block.type === 'video' || block.type === 'file') {
         const url = (block as any).url as string | undefined;
         const fileId = (block as any).file_id as string | undefined;
         const base64 = (block as any).base64 as string | undefined;
@@ -1589,14 +1589,85 @@ export class Agent {
 
   private async resolveMultimodalBlocks(blocks: ContentBlock[]): Promise<ContentBlock[]> {
     const model = this.model as any;
-    if (typeof model.uploadFile !== 'function') {
-      return blocks;
-    }
+    const config = this.model.toConfig();
+    const provider = config.provider;
+    const multimodal = config.multimodal || {};
 
-    const provider = this.model.toConfig().provider;
+    // Check provider capabilities for audio/video
+    const supportsAudio = provider === 'gemini' || provider === 'openai';
+    const supportsVideo = provider === 'gemini';
+
     const resolved: ContentBlock[] = [];
 
     for (const block of blocks) {
+      // Handle audio block with callback fallback
+      if (block.type === 'audio') {
+        if (!supportsAudio && multimodal.audio?.customTranscriber) {
+          try {
+            const transcript = await multimodal.audio.customTranscriber({
+              base64: block.base64,
+              url: block.url,
+              mimeType: block.mime_type,
+            });
+            resolved.push({ type: 'text', text: `[Audio Transcript]: ${transcript}` });
+            continue;
+          } catch (error: any) {
+            this.events.emitMonitor({
+              channel: 'monitor',
+              type: 'error',
+              severity: 'warn',
+              phase: 'system',
+              message: 'audio transcription failed, falling back to placeholder',
+              detail: { error: error?.message || String(error) },
+            });
+          }
+        }
+        // If supported or no callback, pass through (provider will handle or degrade)
+        resolved.push(block);
+        continue;
+      }
+
+      // Handle video block with callback fallback
+      if (block.type === 'video') {
+        if (!supportsVideo && multimodal.video?.customFrameExtractor) {
+          try {
+            const frames = await multimodal.video.customFrameExtractor({
+              base64: block.base64,
+              url: block.url,
+              mimeType: block.mime_type,
+            });
+            // Add all extracted frames as image blocks
+            for (const frame of frames) {
+              resolved.push({
+                type: 'image',
+                base64: frame.base64,
+                mime_type: frame.mimeType,
+              } as ContentBlock);
+            }
+            resolved.push({ type: 'text', text: `[Video: ${frames.length} frames extracted]` });
+            continue;
+          } catch (error: any) {
+            this.events.emitMonitor({
+              channel: 'monitor',
+              type: 'error',
+              severity: 'warn',
+              phase: 'system',
+              message: 'video frame extraction failed, falling back to placeholder',
+              detail: { error: error?.message || String(error) },
+            });
+          }
+        }
+        // If supported or no callback, pass through (provider will handle or degrade)
+        resolved.push(block);
+        continue;
+      }
+
+      // Handle image and file uploads (existing logic)
+      if (typeof model.uploadFile !== 'function') {
+        resolved.push(block);
+        continue;
+      }
+
       if (
         (block.type === 'image' || block.type === 'file') &&
         block.base64 &&

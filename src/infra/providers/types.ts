@@ -66,7 +66,7 @@ export interface UploadFileInput {
   data: Buffer;
   mimeType: string;
   filename?: string;
-  kind: 'image' | 'file';
+  kind: 'image' | 'audio' | 'video' | 'file';
 }
 
 /**
@@ -114,6 +114,34 @@ export interface MultimodalOptions {
   maxBase64Bytes?: number;
   /** Allowed MIME types */
   allowMimeTypes?: string[];
+
+  /** Audio-specific options */
+  audio?: {
+    /** Allowed audio MIME types */
+    allowMimeTypes?: string[];
+    /** Maximum audio duration in seconds */
+    maxDurationSec?: number;
+    /** Custom transcriber callback for providers without native audio support */
+    customTranscriber?: (audio: {
+      base64?: string;
+      url?: string;
+      mimeType?: string;
+    }) => Promise<string>;
+  };
+
+  /** Video-specific options */
+  video?: {
+    /** Allowed video MIME types */
+    allowMimeTypes?: string[];
+    /** Maximum video duration in seconds */
+    maxDurationSec?: number;
+    /** Custom frame extractor callback for providers without native video support */
+    customFrameExtractor?: (video: {
+      base64?: string;
+      url?: string;
+      mimeType?: string;
+    }) => Promise<Array<{ base64: string; mimeType: string }>>;
+  };
 }
 
 /**
@@ -203,6 +231,8 @@ export interface ProviderCapabilities {
   supportsInterleavedThinking: boolean;
   supportsImages: boolean;
   supportsAudio: boolean;
+  supportsVideo: boolean;
+  supportsAudioOutput: boolean;
   supportsFiles: boolean;
   supportsTools: boolean;
   supportsStreaming: boolean;
@@ -211,6 +241,9 @@ export interface ProviderCapabilities {
   // Limits
   maxContextTokens: number;
   maxOutputTokens: number;
+  maxAudioDurationSec?: number;
+  maxVideoDurationSec?: number;
+  maxInlineDataBytes?: number;
 
   // Cache requirements
   minCacheableTokens?: number;

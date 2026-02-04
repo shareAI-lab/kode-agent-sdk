@@ -194,7 +194,7 @@ async function main() {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   console.log('Enter a message. Type /exit to quit.');
-  console.log('Use "读取 <path>" or "read <path>" to load a local PDF/image.');
+  console.log('Use "读取 <path>" or "read <path>" to load a local PDF/image/audio/video.');
   console.log('Optional prompt: "读取 <path> | <prompt>" or "读取 <path>，<prompt>" or "read <path> <prompt>".');
   while (true) {
     const input = (await rl.question('> ')).trim();
@@ -215,6 +215,10 @@ async function main() {
           file.prompt ??
           (file.kind === 'pdf'
             ? 'Summarize the PDF in 3 bullet points.'
+            : file.kind === 'audio'
+            ? 'Describe or transcribe this audio.'
+            : file.kind === 'video'
+            ? 'Describe what happens in this video.'
             : 'Describe the image in one sentence.');
         const blocks: ContentBlock[] = [
           { type: 'text', text: prompt },
@@ -224,6 +228,18 @@ async function main() {
                 base64: file.data.toString('base64'),
                 mime_type: file.mimeType,
                 filename: file.filename,
+              }
+            : file.kind === 'audio'
+            ? {
+                type: 'audio',
+                base64: file.data.toString('base64'),
+                mime_type: file.mimeType,
+              }
+            : file.kind === 'video'
+            ? {
+                type: 'video',
+                base64: file.data.toString('base64'),
+                mime_type: file.mimeType,
               }
             : {
                 type: 'image',

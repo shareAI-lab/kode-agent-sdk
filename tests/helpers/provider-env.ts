@@ -96,7 +96,7 @@ export function loadProviderEnv(provider: ProviderId): ProviderEnvResult {
   const model = getEnvValue([`${prefix}_MODEL_ID`, `${prefix}_MODEL`]);
   const baseUrl = getEnvValue([`${prefix}_BASE_URL`]);
   const proxyUrl = getEnvValue([`${prefix}_PROXY_URL`]);
-  const openaiApi = getEnvValue([`${prefix}_OPENAI_API`, `${prefix}_OPENAI_API_MODE`, `${prefix}_OPENAI_OPENAI_API`]);
+  const openaiApi = getEnvValue([`${prefix}_API`, `${prefix}_OPENAI_API`, `${prefix}_OPENAI_API_MODE`]);
   const extraHeaders = parseJsonEnv(getEnvValue([`${prefix}_EXTRA_HEADERS`]));
   const extraBody = parseJsonEnv(getEnvValue([`${prefix}_EXTRA_BODY`]));
   const enablePdf = parseEnableFlag(getEnvValue([`${prefix}_ENABLE_PDF`]));

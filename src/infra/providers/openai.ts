@@ -34,8 +34,10 @@ import {
   joinReasoningBlocks,
   normalizeThinkBlocks,
   extractReasoningDetails,
+  buildOpenAIAudioPart,
   IMAGE_UNSUPPORTED_TEXT,
   AUDIO_UNSUPPORTED_TEXT,
+  VIDEO_UNSUPPORTED_TEXT,
   FILE_UNSUPPORTED_TEXT,
 } from './utils';
 
@@ -654,7 +656,7 @@ export class OpenAIProvider implements ModelProvider {
     const output: any[] = [];
     const toolCallNames = new Map<string, string>();
     const useStructuredContent = messages.some((msg) =>
-      getMessageBlocks(msg).some((block) => block.type === 'image' || block.type === 'audio' || block.type === 'file')
+      getMessageBlocks(msg).some((block) => block.type === 'image' || block.type === 'audio' || block.type === 'video' || block.type === 'file')
     );
 
     for (const msg of messages) {
@@ -796,8 +798,20 @@ export class OpenAIProvider implements ModelProvider {
         continue;
       }
       if (block.type === 'audio') {
+        // OpenAI Chat Completions API supports audio via input_audio (wav/mp3 base64 only)
+        const audioPart = buildOpenAIAudioPart(block);
+        if (audioPart) {
+          contentParts.push(audioPart);
+        } else {
+          degraded = true;
+          appendText(AUDIO_UNSUPPORTED_TEXT);
+        }
+        continue;
+      }
+      if (block.type === 'video') {
+        // OpenAI does not support video input
         degraded = true;
-        appendText(AUDIO_UNSUPPORTED_TEXT);
+        appendText(VIDEO_UNSUPPORTED_TEXT);
         continue;
       }
       if (block.type === 'file') {
@@ -836,8 +850,17 @@ export class OpenAIProvider implements ModelProvider {
         } else if (block.type === 'reasoning' && reasoningTransport === 'text') {
           parts.push({ type: textType, text: `<think>${block.reasoning}</think>` });
         } else if (block.type === 'audio') {
+          const audioPart = buildOpenAIAudioPart(block);
+          if (audioPart) {
+            parts.push(audioPart);
+          } else {
+            degraded = true;
+            parts.push({ type: textType, text: AUDIO_UNSUPPORTED_TEXT });
+          }
+        } else if (block.type === 'video') {
+          // OpenAI Responses API does not support video input
           degraded = true;
-          parts.push({ type: textType, text: AUDIO_UNSUPPORTED_TEXT });
+          parts.push({ type: textType, text: VIDEO_UNSUPPORTED_TEXT });
         } else if (block.type === 'file') {
           if ((block as any).file_id) {
             parts.push({ type: 'input_file', file_id: (block as any).file_id });

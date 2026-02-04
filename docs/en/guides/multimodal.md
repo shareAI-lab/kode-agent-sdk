@@ -1,6 +1,6 @@
 # Multimodal Content Guide
 
-KODE SDK supports multimodal input including images, audio, and files (PDF). This guide covers how to send multimodal content to LLM models and manage multimodal history.
+KODE SDK supports multimodal input including images, audio, video, and files (PDF). This guide covers how to send multimodal content to LLM models and manage multimodal history.
 
 ---
 
@@ -10,7 +10,8 @@ KODE SDK supports multimodal input including images, audio, and files (PDF). Thi
 |------|------------|---------------------|
 | Images | `image` | Anthropic, OpenAI, Gemini, GLM, Minimax |
 | PDF Files | `file` | Anthropic, OpenAI (Responses API), Gemini |
-| Audio | `audio` | OpenAI, Gemini |
+| Audio | `audio` | OpenAI (wav/mp3), Gemini |
+| Video | `video` | Gemini |
 
 ---
 
@@ -65,6 +66,34 @@ const content: ContentBlock[] = [
 const response = await agent.send(content);
 ```
 
+### Audio Input
+
+```typescript
+const audioBuffer = fs.readFileSync('./audio.wav');
+const base64 = audioBuffer.toString('base64');
+
+const content: ContentBlock[] = [
+  { type: 'text', text: 'Please transcribe this audio.' },
+  { type: 'audio', base64, mime_type: 'audio/wav' }
+];
+
+const response = await agent.send(content);
+```
+
+### Video Input
+
+```typescript
+const videoBuffer = fs.readFileSync('./video.mp4');
+const base64 = videoBuffer.toString('base64');
+
+const content: ContentBlock[] = [
+  { type: 'text', text: 'Describe what is happening in this video.' },
+  { type: 'video', base64, mime_type: 'video/mp4' }
+];
+
+const response = await agent.send(content);
+```
+
 ---
 
 ## Multimodal Configuration
@@ -93,9 +122,9 @@ const agent = await Agent.create({
 Configure multimodal options in the model configuration:
 
 ```typescript
-const provider = new AnthropicProvider(
-  process.env.ANTHROPIC_API_KEY!,
-  'claude-sonnet-4-20250514',
+const provider = new GeminiProvider(
+  process.env.GEMINI_API_KEY!,
+  'gemini-2.0-flash-exp',
   undefined, // baseUrl
   undefined, // proxyUrl
   {
@@ -105,9 +134,12 @@ const provider = new AnthropicProvider(
       allowMimeTypes: [             // Allowed MIME types
         'image/jpeg',
         'image/png',
-        'image/gif',
         'image/webp',
         'application/pdf',
+        'audio/wav',
+        'audio/mp3',
+        'video/mp4',
+        'video/webm',
       ],
     },
   }
@@ -139,6 +171,24 @@ const provider = new AnthropicProvider(
 |-----------|-----------|-------|
 | `application/pdf` | `.pdf` | Anthropic, OpenAI (Responses API), Gemini |
 
+### Audio
+
+| MIME Type | Extension | Notes |
+|-----------|-----------|-------|
+| `audio/wav` | `.wav` | OpenAI, Gemini |
+| `audio/mp3` | `.mp3` | OpenAI, Gemini |
+| `audio/mpeg` | `.mp3` | OpenAI, Gemini |
+| `audio/ogg` | `.ogg` | Gemini only |
+| `audio/flac` | `.flac` | Gemini only |
+
+### Video
+
+| MIME Type | Extension | Notes |
+|-----------|-----------|-------|
+| `video/mp4` | `.mp4` | Gemini only |
+| `video/webm` | `.webm` | Gemini only |
+| `video/quicktime` | `.mov` | Gemini only |
+
 ---
 
 ## Provider-Specific Notes
@@ -146,14 +196,12 @@ const provider = new AnthropicProvider(
 ### Anthropic
 
 - Supports images and PDF files
-- Use `files-api-2025-04-14` beta for file uploads
+- Files API beta header is automatically added when file blocks are detected
 - Base64 images embedded directly in messages
+- **Audio and video are not supported**
 
 ```typescript
 const provider = new AnthropicProvider(apiKey, model, baseUrl, proxyUrl, {
-  beta: {
-    filesApi: true,  // Enable Files API
-  },
   multimodal: {
     mode: 'url+base64',
   },
@@ -163,29 +211,69 @@ const provider = new AnthropicProvider(apiKey, model, baseUrl, proxyUrl, {
 ### OpenAI
 
 - Images: Supported in Chat Completions API
-- PDF/Files: Requires Responses API (`openaiApi: 'responses'`)
+- PDF/Files: Requires Responses API (`api: 'responses'`)
+- Audio: Supports wav/mp3 formats via Chat Completions API `input_audio` type
+- **Video is not supported** (use `customFrameExtractor` callback to extract frames as images)
 
 ```typescript
 const provider = new OpenAIProvider(apiKey, model, baseUrl, proxyUrl, {
   api: 'responses',  // Required for PDF support
   multimodal: {
     mode: 'url+base64',
+    allowMimeTypes: [
+      'image/jpeg', 'image/png', 'image/webp',
+      'audio/wav', 'audio/mp3',
+      'application/pdf',
+    ],
   },
 });
 ```
 
 ### Gemini
 
-- Supports images and PDF files
+- Supports images, PDF, audio, and video
 - GIF format not supported
-- Use `mediaResolution` option for image quality
+- Audio and video natively supported without special configuration
 
 ```typescript
 const provider = new GeminiProvider(apiKey, model, baseUrl, proxyUrl, {
-  mediaResolution: 'high',  // 'low' | 'medium' | 'high'
   multimodal: {
     mode: 'url+base64',
+    allowMimeTypes: [
+      'image/jpeg', 'image/png', 'image/webp',
+      'application/pdf',
+      'audio/wav', 'audio/mp3', 'audio/ogg',
+      'video/mp4', 'video/webm',
+    ],
   },
+});
+```
+
+---
+
+## Video Fallback Handling
+
+For providers that don't support video (like OpenAI), you can configure `customFrameExtractor` callback to extract video frames as images:
+
+```typescript
+const multimodalConfig = {
+  mode: 'url+base64',
+  maxBase64Bytes: 20_000_000,
+  video: {
+    // Extract key frames when provider doesn't support video
+    customFrameExtractor: async (video: { base64?: string; url?: string; mimeType?: string }) => {
+      // Use ffmpeg or other tools to extract key frames
+      // Return array of images
+      return [
+        { base64: '...', mimeType: 'image/jpeg' },
+        { base64: '...', mimeType: 'image/jpeg' },
+      ];
+    },
+  },
+};
+
+const provider = new OpenAIProvider(apiKey, model, baseUrl, proxyUrl, {
+  multimodal: multimodalConfig,
 });
 ```
 
@@ -193,15 +281,15 @@ const provider = new GeminiProvider(apiKey, model, baseUrl, proxyUrl, {
 
 ## Best Practices
 
-### 1. Use Appropriate Image Sizes
+### 1. Use Appropriate File Sizes
 
-Large images increase token usage and latency. Resize images before sending:
+Large files increase token usage and latency. Resize before sending:
 
 ```typescript
-// Recommendation: Keep images under 1MB for optimal performance
+// Recommendation: Keep files under 1MB for optimal performance
 const maxBytes = 1024 * 1024; // 1MB
 
-function validateImageSize(base64: string): boolean {
+function validateFileSize(base64: string): boolean {
   const bytes = Math.ceil(base64.length * 3 / 4);
   return bytes <= maxBytes;
 }
@@ -209,12 +297,12 @@ function validateImageSize(base64: string): boolean {
 
 ### 2. Handle Multimodal Context Retention
 
-For long conversations with many images, configure retention to avoid context overflow:
+For long conversations with many multimedia files, configure retention to avoid context overflow:
 
 ```typescript
 const agent = await Agent.create({
   templateId: 'vision-assistant',
-  multimodalRetention: { keepRecent: 2 },  // Keep only recent 2 images
+  multimodalRetention: { keepRecent: 2 },  // Keep only recent 2 multimedia messages
   context: {
     maxTokens: 100_000,
     compressToTokens: 60_000,
@@ -227,19 +315,22 @@ const agent = await Agent.create({
 Always validate MIME types before sending:
 
 ```typescript
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const ALLOWED_TYPES: Record<string, string[]> = {
+  image: ['image/jpeg', 'image/png', 'image/webp'],
+  audio: ['audio/wav', 'audio/mp3', 'audio/mpeg'],
+  video: ['video/mp4', 'video/webm'],
+};
 
-function getImageMimeType(filename: string): string {
+function getMimeType(filename: string, category: 'image' | 'audio' | 'video'): string {
   const ext = filename.toLowerCase().split('.').pop();
   const mimeMap: Record<string, string> = {
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    png: 'image/png',
-    webp: 'image/webp',
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+    wav: 'audio/wav', mp3: 'audio/mp3',
+    mp4: 'video/mp4', webm: 'video/webm',
   };
   const mimeType = mimeMap[ext!];
-  if (!mimeType || !ALLOWED_IMAGE_TYPES.includes(mimeType)) {
-    throw new Error(`Unsupported image type: ${ext}`);
+  if (!mimeType || !ALLOWED_TYPES[category].includes(mimeType)) {
+    throw new Error(`Unsupported ${category} type: ${ext}`);
   }
   return mimeType;
 }
@@ -254,22 +345,25 @@ Common multimodal errors:
 | Error | Cause | Solution |
 |-------|-------|----------|
 | `MultimodalValidationError: Base64 is not allowed` | `mode` set to `'url'` only | Set `mode: 'url+base64'` |
-| `MultimodalValidationError: base64 payload too large` | Exceeds `maxBase64Bytes` | Resize image or increase limit |
+| `MultimodalValidationError: base64 payload too large` | Exceeds `maxBase64Bytes` | Resize file or increase limit |
 | `MultimodalValidationError: mime_type not allowed` | MIME type not in allowlist | Add to `allowMimeTypes` |
 | `MultimodalValidationError: Missing url/file_id/base64` | No content source provided | Provide `url`, `file_id`, or `base64` |
+| `UnsupportedContentBlockError: Unsupported content block type: video` | Provider doesn't support video | Use Gemini or configure `customFrameExtractor` |
 
 ---
 
-## Complete Example
+## Complete Examples
+
+### Image Analysis Example
 
 ```typescript
-import { Agent, AnthropicProvider, JSONStore, ContentBlock } from '@shareai-lab/kode-sdk';
+import { Agent, GeminiProvider, JSONStore, ContentBlock } from '@shareai-lab/kode-sdk';
 import * as fs from 'fs';
 
 async function analyzeImage() {
-  const provider = new AnthropicProvider(
-    process.env.ANTHROPIC_API_KEY!,
-    'claude-sonnet-4-20250514',
+  const provider = new GeminiProvider(
+    process.env.GEMINI_API_KEY!,
+    'gemini-2.0-flash-exp',
     undefined,
     undefined,
     {
@@ -294,7 +388,6 @@ async function analyzeImage() {
     modelFactory: () => provider,
   });
 
-  // Read and send image
   const imageBuffer = fs.readFileSync('./photo.jpg');
   const base64 = imageBuffer.toString('base64');
 
@@ -303,14 +396,48 @@ async function analyzeImage() {
     { type: 'image', base64, mime_type: 'image/jpeg' }
   ];
 
-  for await (const envelope of agent.subscribe(['progress'])) {
+  // Use chatStream for streaming responses
+  for await (const envelope of agent.chatStream(content)) {
     if (envelope.event.type === 'text_chunk') {
       process.stdout.write(envelope.event.delta);
     }
     if (envelope.event.type === 'done') break;
   }
+}
+```
 
-  await agent.send(content);
+### Audio Transcription Example
+
+```typescript
+async function transcribeAudio() {
+  const audioBuffer = fs.readFileSync('./speech.wav');
+  const base64 = audioBuffer.toString('base64');
+
+  const content: ContentBlock[] = [
+    { type: 'text', text: 'Please transcribe this audio and identify the speaker\'s emotion.' },
+    { type: 'audio', base64, mime_type: 'audio/wav' }
+  ];
+
+  const response = await agent.chat(content);
+  console.log(response.text);
+}
+```
+
+### Video Analysis Example
+
+```typescript
+async function analyzeVideo() {
+  const videoBuffer = fs.readFileSync('./clip.mp4');
+  const base64 = videoBuffer.toString('base64');
+
+  const content: ContentBlock[] = [
+    { type: 'text', text: 'What is happening in this video? Please describe in detail.' },
+    { type: 'video', base64, mime_type: 'video/mp4' }
+  ];
+
+  // Note: Only Gemini supports video
+  const response = await agent.chat(content);
+  console.log(response.text);
 }
 ```
 

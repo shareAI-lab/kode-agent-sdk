@@ -10,6 +10,7 @@ export type ContentBlock =
   | ReasoningContentBlock
   | ImageContentBlock
   | AudioContentBlock
+  | VideoContentBlock
   | FileContentBlock;
 
 export type ReasoningContentBlock = {
@@ -29,6 +30,15 @@ export type ImageContentBlock = {
 
 export type AudioContentBlock = {
   type: 'audio';
+  url?: string;
+  file_id?: string;
+  base64?: string;
+  mime_type?: string;
+  meta?: Record<string, any>;
+};
+
+export type VideoContentBlock = {
+  type: 'video';
   url?: string;
   file_id?: string;
   base64?: string;

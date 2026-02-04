@@ -35,6 +35,7 @@ import {
   normalizeAnthropicDelta,
   IMAGE_UNSUPPORTED_TEXT,
   AUDIO_UNSUPPORTED_TEXT,
+  VIDEO_UNSUPPORTED_TEXT,
   FILE_UNSUPPORTED_TEXT,
 } from './utils';
 
@@ -274,11 +275,27 @@ export class AnthropicProvider implements ModelProvider {
           degraded = true;
           return { type: 'text', text: AUDIO_UNSUPPORTED_TEXT };
         }
+        if (block.type === 'video') {
+          degraded = true;
+          return { type: 'text', text: VIDEO_UNSUPPORTED_TEXT };
+        }
         if (block.type === 'file') {
           if (block.file_id) {
             return {
               type: 'document',
               source: { type: 'file', file_id: block.file_id },
+            };
+          }
+          if (block.base64 && block.mime_type) {
+            return {
+              type: 'document',
+              source: { type: 'base64', media_type: block.mime_type, data: block.base64 },
+            };
+          }
+          if (block.url) {
+            return {
+              type: 'document',
+              source: { type: 'url', url: block.url },
             };
           }
           degraded = true;
