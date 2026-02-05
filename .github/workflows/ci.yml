@@ -9,6 +9,7 @@ on:
 
 env:
   NODE_VERSION: '20'
+  PNPM_VERSION: '9.15.1'
 
 jobs:
   # ===========================================================================
@@ -20,20 +21,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
   unit-tests:
     name: Unit Tests
@@ -56,17 +63,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run unit tests
-        run: npm run test:unit
+        run: pnpm run test:unit
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5433
@@ -93,14 +106,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Create test environment
         run: |
@@ -128,19 +147,19 @@ jobs:
 
       - name: Run Anthropic E2E
         if: matrix.provider == 'anthropic'
-        run: npx ts-node tests/e2e/providers/anthropic.test.ts
+        run: pnpm exec ts-node tests/e2e/providers/anthropic.test.ts
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Run OpenAI E2E
         if: matrix.provider == 'openai'
-        run: npx ts-node tests/e2e/providers/openai.test.ts
+        run: pnpm exec ts-node tests/e2e/providers/openai.test.ts
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Run Gemini E2E
         if: matrix.provider == 'gemini'
-        run: npx ts-node tests/e2e/providers/gemini.test.ts
+        run: pnpm exec ts-node tests/e2e/providers/gemini.test.ts
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
@@ -156,14 +175,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Create test environment
         run: |
@@ -175,7 +200,7 @@ jobs:
           EOF
 
       - name: Run Agent Integration Tests
-        run: npx ts-node tests/integration/agent/ci-integration.test.ts
+        run: pnpm exec ts-node tests/integration/agent/ci-integration.test.ts
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
@@ -191,14 +216,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Create test environment
         run: |
@@ -209,7 +240,7 @@ jobs:
           EOF
 
       - name: Run Comprehensive Agent Tests
-        run: npx ts-node --transpileOnly tests/integration/agent/ci-agent.test.ts
+        run: pnpm exec ts-node --transpileOnly tests/integration/agent/ci-agent.test.ts
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
