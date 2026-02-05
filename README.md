@@ -146,6 +146,8 @@ See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detai
 | [Providers](./docs/en/guides/providers.md) | Model provider configuration |
 | [Database](./docs/en/guides/database.md) | SQLite/PostgreSQL persistence |
 | [Resume & Fork](./docs/en/guides/resume-fork.md) | Crash recovery & branching |
+| **Project** | |
+| [Contribution Guide](./docs/en/contribution.md) | How to contribute |
 | **Reference** | |
 | [API Reference](./docs/en/reference/api.md) | Complete API documentation |
 | [Examples](./docs/en/examples/playbooks.md) | All examples explained |
