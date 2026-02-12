@@ -1,6 +1,6 @@
 {
   "name": "@shareai-lab/kode-sdk",
-  "version": "2.7.0",
+  "version": "2.7.3",
   "description": "Event-driven, long-running AI Agent development framework with enterprise-grade persistence and context management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,6 +14,7 @@
     "test:integration": "ts-node --project tsconfig.json ./tests/run-integration.ts",
     "test:e2e": "ts-node --project tsconfig.json ./tests/run-e2e.ts",
     "test:all": "ts-node --project tsconfig.json ./tests/run-all.ts",
+    "test:benchmark": "ts-node --project tsconfig.json ./tests/benchmark/run-benchmark.ts",
     "example:getting-started": "ts-node examples/getting-started.ts",
     "example:openai": "ts-node examples/openai-usage.ts",
     "example:gemini": "ts-node examples/gemini-usage.ts",
