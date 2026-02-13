@@ -1,0 +1,67 @@
+[
+  {
+    "task_id": "retail_001",
+    "user_scenario": "You are Emma Wilson (customer ID: CUST001). You received your order ORD001 but the Wireless Headphones are defective - they won't pair with your phone. You want to return the headphones. You're happy to keep the water bottles. If asked, confirm it was delivered on January 22.",
+    "expected_db": {
+      "orders": [
+        {
+          "order_id": "ORD001",
+          "status": "returned"
+        }
+      ]
+    },
+    "max_turns": 10
+  },
+  {
+    "task_id": "retail_002",
+    "user_scenario": "You are James Brown (customer ID: CUST002). You received Running Shoes (Size 10) in order ORD002 but they're too small. You want to exchange them for Size 11 instead. If Size 11 is out of stock, ask when they'll be available.",
+    "expected_db": {
+      "orders": [
+        {
+          "order_id": "ORD002",
+          "status": "delivered"
+        }
+      ]
+    },
+    "max_turns": 10
+  },
+  {
+    "task_id": "retail_003",
+    "user_scenario": "You are Sophia Lee (customer ID: CUST003). You want to return the Cotton T-Shirts from order ORD003 because they don't fit. Your order was delivered on December 17, 2025. If the agent says it's past the return window, accept that.",
+    "expected_db": {
+      "orders": [
+        {
+          "order_id": "ORD003",
+          "status": "delivered"
+        }
+      ]
+    },
+    "max_turns": 8
+  },
+  {
+    "task_id": "retail_004",
+    "user_scenario": "You are Liam Martinez (customer ID: CUST004). You placed order ORD004 and want to know when it will arrive. You also want to know what items are in the order since you forgot what you bought.",
+    "expected_db": {
+      "orders": [
+        {
+          "order_id": "ORD004",
+          "status": "shipped"
+        }
+      ]
+    },
+    "max_turns": 8
+  },
+  {
+    "task_id": "retail_005",
+    "user_scenario": "You are Olivia Davis (customer ID: CUST005). You received your Yoga Mat from order ORD005 but want to exchange it for a Bluetooth Speaker instead since you already have a yoga mat at home. Accept whatever the price difference is.",
+    "expected_db": {
+      "orders": [
+        {
+          "order_id": "ORD005",
+          "status": "delivered"
+        }
+      ]
+    },
+    "max_turns": 10
+  }
+]

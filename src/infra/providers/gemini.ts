@@ -52,7 +52,7 @@ export interface GeminiProviderOptions {
 
 export class GeminiProvider implements ModelProvider {
   readonly maxWindowSize = 1_000_000;
-  readonly maxOutputTokens = 4096;
+  readonly maxOutputTokens = 16384;
   readonly temperature = 0.7;
   readonly model: string;
   private readonly baseUrl: string;

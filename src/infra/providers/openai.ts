@@ -134,7 +134,7 @@ export interface OpenAIProviderOptions {
 
 export class OpenAIProvider implements ModelProvider {
   readonly maxWindowSize = 128_000;
-  readonly maxOutputTokens = 4096;
+  readonly maxOutputTokens = 16384;
   readonly temperature = 0.7;
   readonly model: string;
   private readonly baseUrl: string;

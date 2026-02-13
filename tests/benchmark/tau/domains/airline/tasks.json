@@ -1,0 +1,71 @@
+[
+  {
+    "task_id": "airline_001",
+    "user_scenario": "You are John Smith (user ID: USR001). Your reservation ID is RES001. You are currently booked on a March 15 SFO to LAX flight. You want to change your flight to March 17 instead. You prefer the morning flight if available. If the agent asks for confirmation, agree to proceed.",
+    "expected_db": {
+      "reservations": [
+        {
+          "reservation_id": "RES001",
+          "flight_id": "FL003",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "max_turns": 10
+  },
+  {
+    "task_id": "airline_002",
+    "user_scenario": "You are Alice Johnson (user ID: USR002). Your reservation ID is RES002. You need to cancel your LAX to JFK flight on March 20 because your plans changed. Accept the cancellation terms whatever they are.",
+    "expected_db": {
+      "reservations": [
+        {
+          "reservation_id": "RES002",
+          "status": "cancelled"
+        }
+      ]
+    },
+    "max_turns": 10
+  },
+  {
+    "task_id": "airline_003",
+    "user_scenario": "You are Bob Chen (user ID: USR003). You want to check the details of your upcoming flight - you think your reservation is RES003 but you're not sure of the exact departure time. Just ask for the information, you don't want to make any changes.",
+    "expected_db": {
+      "reservations": [
+        {
+          "reservation_id": "RES003",
+          "status": "confirmed",
+          "flight_id": "FL002"
+        }
+      ]
+    },
+    "max_turns": 8
+  },
+  {
+    "task_id": "airline_004",
+    "user_scenario": "You are Maria Garcia (user ID: USR004). Your reservation is RES004 for a JFK to SFO flight. You want to know what the baggage allowance is for your ticket class, and also confirm your flight details. You don't want to make any changes.",
+    "expected_db": {
+      "reservations": [
+        {
+          "reservation_id": "RES004",
+          "status": "confirmed",
+          "flight_id": "FL006"
+        }
+      ]
+    },
+    "max_turns": 8
+  },
+  {
+    "task_id": "airline_005",
+    "user_scenario": "You are David Kim (user ID: USR005). Your reservation is RES005 for a SFO to SEA flight on March 18. You just found out that flight has no seats available and you're worried. You want the agent to help you rebook to another SFO-SEA flight. Accept any available option.",
+    "expected_db": {
+      "reservations": [
+        {
+          "reservation_id": "RES005",
+          "flight_id": "FL008",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "max_turns": 12
+  }
+]

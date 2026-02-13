@@ -1,0 +1,182 @@
+[
+  {
+    "id": "mini-swe-001",
+    "description": "The `chunk` function splits an array into sub-arrays of the given size, but it returns an extra empty array at the end for certain inputs. For example `chunk([1,2,3,4,5], 2)` returns `[[1,2],[3,4],[5],[]]` instead of `[[1,2],[3,4],[5]]`.",
+    "files": {
+      "src.js": "function chunk(arr, size) {\n  if (size <= 0) return [];\n  const result = [];\n  for (let i = 0; i <= arr.length; i += size) {\n    result.push(arr.slice(i, i + size));\n  }\n  return result;\n}\nmodule.exports = { chunk };\n",
+      "test.js": "const { chunk } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = chunk([1, 2, 3, 4, 5], 2);\nassert(r1.length === 3, 'Expected 3 chunks, got ' + r1.length);\nassert(JSON.stringify(r1) === '[[1,2],[3,4],[5]]', 'Wrong result: ' + JSON.stringify(r1));\n\nconst r2 = chunk([1, 2, 3, 4], 2);\nassert(r2.length === 2, 'Expected 2 chunks, got ' + r2.length);\n\nconst r3 = chunk([], 3);\nassert(r3.length === 0, 'Expected 0 chunks for empty array, got ' + r3.length);\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-002",
+    "description": "The `countWords` function should return the number of words in a string. It works for simple cases like `countWords('hello world')` returning 2, but fails when there are multiple consecutive spaces. `countWords('hello  world')` returns 3 instead of 2, and `countWords('  hello  ')` returns 4 instead of 1.",
+    "files": {
+      "src.js": "function countWords(text) {\n  if (!text) return 0;\n  return text.split(' ').length;\n}\nmodule.exports = { countWords };\n",
+      "test.js": "const { countWords } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(countWords('hello world') === 2, 'Basic two words');\nassert(countWords('hello  world') === 2, 'Double space: expected 2, got ' + countWords('hello  world'));\nassert(countWords('') === 0, 'Empty string should be 0');\nassert(countWords('  hello  ') === 1, 'Padded: expected 1, got ' + countWords('  hello  '));\nassert(countWords('one') === 1, 'Single word');\nassert(countWords('a b c') === 3, 'Three words');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-003",
+    "description": "The `sortNumbers` function should sort an array of numbers in ascending numeric order. However, `sortNumbers([10, 2, 30, 1, 20])` returns `[1, 10, 2, 20, 30]` instead of `[1, 2, 10, 20, 30]`. It appears to be sorting lexicographically instead of numerically.",
+    "files": {
+      "src.js": "function sortNumbers(arr) {\n  return [...arr].sort();\n}\nmodule.exports = { sortNumbers };\n",
+      "test.js": "const { sortNumbers } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = sortNumbers([10, 2, 30, 1, 20]);\nassert(JSON.stringify(r1) === '[1,2,10,20,30]', 'Expected [1,2,10,20,30], got ' + JSON.stringify(r1));\n\nconst r2 = sortNumbers([100, 3, 22]);\nassert(JSON.stringify(r2) === '[3,22,100]', 'Expected [3,22,100], got ' + JSON.stringify(r2));\n\nconst r3 = sortNumbers([5]);\nassert(JSON.stringify(r3) === '[5]', 'Single element');\n\nconst r4 = sortNumbers([]);\nassert(JSON.stringify(r4) === '[]', 'Empty array');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-004",
+    "description": "The `classify` function maps numeric scores to letter grades (A/B/C/D/F). It works for most inputs but `classify(65)` returns `'F'` instead of `'D'`. All scores from 60 to 69 should return 'D'.",
+    "files": {
+      "src.js": "function classify(score) {\n  if (score >= 90) return 'A';\n  if (score >= 80) return 'B';\n  if (score >= 70) return 'C';\n  if (score >= 60) { 'D'; }\n  return 'F';\n}\nmodule.exports = { classify };\n",
+      "test.js": "const { classify } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(classify(95) === 'A', 'Score 95 should be A');\nassert(classify(85) === 'B', 'Score 85 should be B');\nassert(classify(75) === 'C', 'Score 75 should be C');\nassert(classify(65) === 'D', 'Score 65 should be D, got ' + classify(65));\nassert(classify(60) === 'D', 'Score 60 should be D, got ' + classify(60));\nassert(classify(55) === 'F', 'Score 55 should be F');\nassert(classify(100) === 'A', 'Score 100 should be A');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-005",
+    "description": "The `flatten` function should recursively flatten a nested array. `flatten([1, [2, 3], [4, [5]]])` should return `[1, 2, 3, 4, 5]` but instead returns `[1, 4]`. It seems to drop elements that are inside nested arrays.",
+    "files": {
+      "src.js": "function flatten(arr) {\n  return arr.reduce((acc, item) => {\n    if (Array.isArray(item)) {\n      acc.concat(flatten(item));\n    } else {\n      acc.push(item);\n    }\n    return acc;\n  }, []);\n}\nmodule.exports = { flatten };\n",
+      "test.js": "const { flatten } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = flatten([1, [2, 3], [4, [5]]]);\nassert(JSON.stringify(r1) === '[1,2,3,4,5]', 'Deep flatten: expected [1,2,3,4,5], got ' + JSON.stringify(r1));\n\nconst r2 = flatten([1, 2, 3]);\nassert(JSON.stringify(r2) === '[1,2,3]', 'Already flat: ' + JSON.stringify(r2));\n\nconst r3 = flatten([[1], [2], [3]]);\nassert(JSON.stringify(r3) === '[1,2,3]', 'One level: ' + JSON.stringify(r3));\n\nconst r4 = flatten([]);\nassert(JSON.stringify(r4) === '[]', 'Empty array');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-006",
+    "description": "The `reverseWords` function should reverse the order of words in a sentence. For example, `reverseWords('hello world')` should return `'world hello'`. But it currently returns `'worldhello'` — the words are reversed but the spaces between them are missing.",
+    "files": {
+      "src.js": "function reverseWords(sentence) {\n  return sentence.split(' ').reverse().join('');\n}\nmodule.exports = { reverseWords };\n",
+      "test.js": "const { reverseWords } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(reverseWords('hello world') === 'world hello', 'Two words: got \"' + reverseWords('hello world') + '\"');\nassert(reverseWords('a b c') === 'c b a', 'Three words');\nassert(reverseWords('single') === 'single', 'Single word unchanged');\nassert(reverseWords('the quick brown fox') === 'fox brown quick the', 'Four words');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-007",
+    "description": "The `addItem` function should return a new array with the item appended, without modifying the original array. However, calling `addItem(original, 4)` mutates the original array. After the call, the original array has been changed, which breaks downstream code that relies on immutability.",
+    "files": {
+      "src.js": "function addItem(list, item) {\n  list.push(item);\n  return list;\n}\nmodule.exports = { addItem };\n",
+      "test.js": "const { addItem } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst original = [1, 2, 3];\nconst result = addItem(original, 4);\n\nassert(JSON.stringify(result) === '[1,2,3,4]', 'Result should contain new item: ' + JSON.stringify(result));\nassert(JSON.stringify(original) === '[1,2,3]', 'Original mutated: ' + JSON.stringify(original));\n\nconst empty = [];\nconst r2 = addItem(empty, 'a');\nassert(JSON.stringify(r2) === '[\"a\"]', 'Add to empty');\nassert(empty.length === 0, 'Empty array mutated');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-008",
+    "description": "The `mapObject` function should transform all values in an object using a callback `fn(value, key)`. But `mapObject({ a: 1, b: 2 }, (v) => v * 2)` returns `{ a: NaN, b: NaN }` instead of `{ a: 2, b: 4 }`. It looks like the callback arguments might be in the wrong order.",
+    "files": {
+      "src.js": "function mapObject(obj, fn) {\n  const result = {};\n  for (const [key, value] of Object.entries(obj)) {\n    result[key] = fn(key, value);\n  }\n  return result;\n}\nmodule.exports = { mapObject };\n",
+      "test.js": "const { mapObject } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = mapObject({ a: 1, b: 2, c: 3 }, (v) => v * 2);\nassert(r1.a === 2, 'a should be 2, got ' + r1.a);\nassert(r1.b === 4, 'b should be 4, got ' + r1.b);\nassert(r1.c === 6, 'c should be 6, got ' + r1.c);\n\nconst r2 = mapObject({ x: 'hello' }, (v, k) => k + ':' + v);\nassert(r2.x === 'x:hello', 'Key-value concat: got ' + r2.x);\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-009",
+    "description": "The `getAdults` function should return all people aged 18 or older from a list. But it currently excludes people who are exactly 18. `getAdults([{name:'Alice', age:18}])` returns an empty array instead of including Alice.",
+    "files": {
+      "src.js": "function getAdults(people) {\n  return people.filter(p => p.age > 18);\n}\nmodule.exports = { getAdults };\n",
+      "test.js": "const { getAdults } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst people = [\n  { name: 'Alice', age: 18 },\n  { name: 'Bob', age: 17 },\n  { name: 'Charlie', age: 25 },\n  { name: 'Diana', age: 18 }\n];\nconst adults = getAdults(people);\nassert(adults.length === 3, 'Expected 3 adults, got ' + adults.length);\nassert(adults.some(p => p.name === 'Alice'), 'Alice (18) should be included');\nassert(adults.some(p => p.name === 'Diana'), 'Diana (18) should be included');\nassert(!adults.some(p => p.name === 'Bob'), 'Bob (17) should be excluded');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-010",
+    "description": "The `truncate` function should shorten a string to `maxLen` characters, adding '...' at the end if truncation occurs. It works for long strings but incorrectly truncates strings that are exactly `maxLen` characters long. `truncate('hello', 5)` returns `'he...'` instead of `'hello'`.",
+    "files": {
+      "src.js": "function truncate(str, maxLen) {\n  if (str.length >= maxLen) {\n    return str.slice(0, maxLen - 3) + '...';\n  }\n  return str;\n}\nmodule.exports = { truncate };\n",
+      "test.js": "const { truncate } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(truncate('hello', 5) === 'hello', 'Exact length should not truncate, got \"' + truncate('hello', 5) + '\"');\nassert(truncate('hi', 5) === 'hi', 'Short string unchanged');\nassert(truncate('hello world', 8) === 'hello...', 'Truncate to 8: got \"' + truncate('hello world', 8) + '\"');\nassert(truncate('abcdefghij', 7) === 'abcd...', 'Truncate to 7');\nassert(truncate('ab', 2) === 'ab', 'Length equals maxLen, no truncation');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-011",
+    "description": "The `capitalize` function should capitalize the first letter of each word in a string. But `capitalize('hello world')` returns `'HELLO WORLD'` instead of `'Hello World'`. It uppercases the entire word rather than just the first character.",
+    "files": {
+      "src.js": "function capitalize(str) {\n  return str.split(' ').map(w => w.toUpperCase()).join(' ');\n}\nmodule.exports = { capitalize };\n",
+      "test.js": "const { capitalize } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(capitalize('hello world') === 'Hello World', 'Basic: got \"' + capitalize('hello world') + '\"');\nassert(capitalize('foo bar baz') === 'Foo Bar Baz', 'Three words');\nassert(capitalize('a') === 'A', 'Single char');\nassert(capitalize('already Capital') === 'Already Capital', 'Mixed case');\nassert(capitalize('') === '', 'Empty string');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-012",
+    "description": "The `range` function should generate an array of numbers from `start` to `end` inclusive. But `range(1, 5)` returns `[1, 2, 3, 4]` instead of `[1, 2, 3, 4, 5]`. The end value is always excluded.",
+    "files": {
+      "src.js": "function range(start, end) {\n  const result = [];\n  for (let i = start; i < end; i++) {\n    result.push(i);\n  }\n  return result;\n}\nmodule.exports = { range };\n",
+      "test.js": "const { range } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(JSON.stringify(range(1, 5)) === '[1,2,3,4,5]', '1 to 5: got ' + JSON.stringify(range(1, 5)));\nassert(JSON.stringify(range(0, 3)) === '[0,1,2,3]', '0 to 3: got ' + JSON.stringify(range(0, 3)));\nassert(JSON.stringify(range(5, 5)) === '[5]', 'Same start/end: got ' + JSON.stringify(range(5, 5)));\nassert(JSON.stringify(range(-2, 1)) === '[-2,-1,0,1]', 'Negative: got ' + JSON.stringify(range(-2, 1)));\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-013",
+    "description": "The `isPalindrome` function checks whether a string is a palindrome. It should be case-insensitive, so `isPalindrome('Racecar')` should return `true`. But it returns `false` because it compares without normalizing case.",
+    "files": {
+      "src.js": "function isPalindrome(str) {\n  const reversed = str.split('').reverse().join('');\n  return str === reversed;\n}\nmodule.exports = { isPalindrome };\n",
+      "test.js": "const { isPalindrome } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(isPalindrome('racecar') === true, 'racecar is a palindrome');\nassert(isPalindrome('Racecar') === true, 'Racecar (mixed case) is a palindrome, got ' + isPalindrome('Racecar'));\nassert(isPalindrome('hello') === false, 'hello is not a palindrome');\nassert(isPalindrome('Madam') === true, 'Madam is a palindrome');\nassert(isPalindrome('a') === true, 'Single char is a palindrome');\nassert(isPalindrome('Ab') === false, 'Ab is not a palindrome');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-014",
+    "description": "The `deepClone` function should create a deep copy of an object, preserving arrays as arrays. But `deepClone({a: [1, 2, 3]})` returns `{a: {\"0\": 1, \"1\": 2, \"2\": 3}}` — arrays are converted to plain objects because the clone always creates `{}` instead of checking for arrays.",
+    "files": {
+      "src.js": "function deepClone(obj) {\n  if (obj === null || typeof obj !== 'object') return obj;\n  const clone = {};\n  for (const key of Object.keys(obj)) {\n    clone[key] = deepClone(obj[key]);\n  }\n  return clone;\n}\nmodule.exports = { deepClone };\n",
+      "test.js": "const { deepClone } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst original = { a: [1, 2, 3], b: { c: 'hello' } };\nconst cloned = deepClone(original);\n\nassert(Array.isArray(cloned.a), 'cloned.a should be an array, got ' + typeof cloned.a);\nassert(JSON.stringify(cloned.a) === '[1,2,3]', 'cloned.a content wrong: ' + JSON.stringify(cloned.a));\nassert(cloned.b.c === 'hello', 'Nested object preserved');\nassert(cloned.a !== original.a, 'Array should be a different reference');\nassert(cloned.b !== original.b, 'Nested obj should be a different reference');\n\noriginal.a.push(4);\nassert(cloned.a.length === 3, 'Mutation should not affect clone');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-015",
+    "description": "The `groupBy` function should group array elements by a key function. But `groupBy([{type:'a', val:1}, {type:'b', val:2}, {type:'a', val:3}], x => x.type)` stores the keys instead of the items in each group. The result is `{a: ['a', 'a'], b: ['b']}` instead of the original objects.",
+    "files": {
+      "src.js": "function groupBy(arr, keyFn) {\n  const groups = {};\n  for (const item of arr) {\n    const key = keyFn(item);\n    if (!groups[key]) groups[key] = [];\n    groups[key].push(key);\n  }\n  return groups;\n}\nmodule.exports = { groupBy };\n",
+      "test.js": "const { groupBy } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst items = [{type:'a', val:1}, {type:'b', val:2}, {type:'a', val:3}];\nconst grouped = groupBy(items, x => x.type);\n\nassert(grouped.a.length === 2, 'Group a should have 2 items, got ' + grouped.a.length);\nassert(grouped.b.length === 1, 'Group b should have 1 item');\nassert(grouped.a[0].val === 1, 'First a item val should be 1, got ' + JSON.stringify(grouped.a[0]));\nassert(grouped.a[1].val === 3, 'Second a item val should be 3');\nassert(grouped.b[0].val === 2, 'b item val should be 2');\n\nconst nums = [1, 2, 3, 4, 5];\nconst evenOdd = groupBy(nums, n => n % 2 === 0 ? 'even' : 'odd');\nassert(evenOdd.odd.length === 3, 'Odd group: ' + JSON.stringify(evenOdd.odd));\nassert(evenOdd.even.length === 2, 'Even group: ' + JSON.stringify(evenOdd.even));\nassert(evenOdd.odd[0] === 1, 'First odd should be 1, got ' + evenOdd.odd[0]);\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-016",
+    "description": "The `intersection` function should return elements present in both arrays. But `intersection([1,2,3], [2,3,4])` returns `[1,2,3]` instead of `[2,3]`. It checks inclusion against the wrong array.",
+    "files": {
+      "src.js": "function intersection(a, b) {\n  return a.filter(item => a.includes(item));\n}\nmodule.exports = { intersection };\n",
+      "test.js": "const { intersection } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = intersection([1, 2, 3], [2, 3, 4]);\nassert(JSON.stringify(r1) === '[2,3]', 'Expected [2,3], got ' + JSON.stringify(r1));\n\nconst r2 = intersection([1, 2], [3, 4]);\nassert(r2.length === 0, 'No common elements, got ' + JSON.stringify(r2));\n\nconst r3 = intersection([5, 5, 6], [5, 7]);\nassert(r3.includes(5), 'Should include 5');\nassert(!r3.includes(6), 'Should not include 6');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-017",
+    "description": "The `zip` function should pair up elements from two arrays. `zip([1,2,3], ['a','b','c'])` should return `[[1,'a'],[2,'b'],[3,'c']]`. But it returns `[[1,1],[2,2],[3,3]]` — it uses the first array for both elements of each pair.",
+    "files": {
+      "src.js": "function zip(a, b) {\n  const len = Math.min(a.length, b.length);\n  const result = [];\n  for (let i = 0; i < len; i++) {\n    result.push([a[i], a[i]]);\n  }\n  return result;\n}\nmodule.exports = { zip };\n",
+      "test.js": "const { zip } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = zip([1, 2, 3], ['a', 'b', 'c']);\nassert(JSON.stringify(r1) === '[[1,\"a\"],[2,\"b\"],[3,\"c\"]]', 'Basic zip: got ' + JSON.stringify(r1));\n\nconst r2 = zip([1, 2], [10, 20, 30]);\nassert(r2.length === 2, 'Should truncate to shorter length');\nassert(JSON.stringify(r2) === '[[1,10],[2,20]]', 'Uneven: got ' + JSON.stringify(r2));\n\nconst r3 = zip([], [1]);\nassert(r3.length === 0, 'Empty first array');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-018",
+    "description": "The `sumBy` function should sum an array of objects by a given numeric key. `sumBy([{v:1},{v:2},{v:3}], 'v')` should return `6`, but it returns `'123'` (string concatenation) because the initial accumulator is an empty string instead of zero.",
+    "files": {
+      "src.js": "function sumBy(arr, key) {\n  return arr.reduce((sum, item) => sum + item[key], '');\n}\nmodule.exports = { sumBy };\n",
+      "test.js": "const { sumBy } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nassert(sumBy([{v:1},{v:2},{v:3}], 'v') === 6, 'Sum should be 6, got ' + sumBy([{v:1},{v:2},{v:3}], 'v'));\nassert(sumBy([{score:10},{score:20}], 'score') === 30, 'Sum should be 30');\nassert(sumBy([], 'v') === 0, 'Empty array should be 0');\nassert(typeof sumBy([{v:1}], 'v') === 'number', 'Result should be a number, got ' + typeof sumBy([{v:1}], 'v'));\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-019",
+    "description": "The `pick` function should create a new object with only the specified keys from the source object. But `pick({a:1, b:2, c:3}, ['a','c'])` returns `{a:'a', c:'c'}` instead of `{a:1, c:3}`. It assigns the key name as the value instead of the actual value.",
+    "files": {
+      "src.js": "function pick(obj, keys) {\n  const result = {};\n  for (const key of keys) {\n    if (key in obj) result[key] = key;\n  }\n  return result;\n}\nmodule.exports = { pick };\n",
+      "test.js": "const { pick } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = pick({a: 1, b: 2, c: 3}, ['a', 'c']);\nassert(r1.a === 1, 'a should be 1, got ' + r1.a);\nassert(r1.c === 3, 'c should be 3, got ' + r1.c);\nassert(r1.b === undefined, 'b should not be present');\n\nconst r2 = pick({x: 'hello', y: 'world'}, ['x', 'z']);\nassert(r2.x === 'hello', 'x should be hello');\nassert(r2.z === undefined, 'z not in source, should be absent');\nassert(Object.keys(r2).length === 1, 'Should only have 1 key');\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  },
+  {
+    "id": "mini-swe-020",
+    "description": "The `difference` function should return elements in the first array that are NOT in the second array. But `difference([1,2,3,4], [2,4])` returns `[2,4]` instead of `[1,3]`. The filter logic is inverted — it returns the intersection instead of the difference.",
+    "files": {
+      "src.js": "function difference(a, b) {\n  return a.filter(item => b.includes(item));\n}\nmodule.exports = { difference };\n",
+      "test.js": "const { difference } = require('./src');\nfunction assert(cond, msg) { if (!cond) { console.error('FAIL:', msg); process.exit(1); } }\n\nconst r1 = difference([1, 2, 3, 4], [2, 4]);\nassert(JSON.stringify(r1) === '[1,3]', 'Expected [1,3], got ' + JSON.stringify(r1));\n\nconst r2 = difference([1, 2, 3], []);\nassert(JSON.stringify(r2) === '[1,2,3]', 'Nothing to remove: got ' + JSON.stringify(r2));\n\nconst r3 = difference([1, 2], [1, 2, 3]);\nassert(r3.length === 0, 'All removed: got ' + JSON.stringify(r3));\n\nconst r4 = difference(['a', 'b', 'c'], ['b']);\nassert(JSON.stringify(r4) === '[\"a\",\"c\"]', 'Strings: got ' + JSON.stringify(r4));\n\nconsole.log('All tests passed');\n"
+    },
+    "test_command": "node test.js"
+  }
+]

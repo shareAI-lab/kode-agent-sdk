@@ -50,7 +50,7 @@ export interface AnthropicProviderOptions {
 
 export class AnthropicProvider implements ModelProvider {
   readonly maxWindowSize = 200_000;
-  readonly maxOutputTokens = 4096;
+  readonly maxOutputTokens = 8192;
   readonly temperature = 0.7;
   readonly model: string;
   private readonly baseUrl: string;
@@ -85,7 +85,7 @@ export class AnthropicProvider implements ModelProvider {
       ...(this.extraBody || {}),
       model: this.model,
       messages: this.formatMessages(messages),
-      max_tokens: opts?.maxTokens || 4096,
+      max_tokens: opts?.maxTokens || this.maxOutputTokens,
     };
 
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
@@ -146,7 +146,7 @@ export class AnthropicProvider implements ModelProvider {
     const body: any = {
       model: this.model,
       messages: this.formatMessages(messages),
-      max_tokens: opts?.maxTokens || 4096,
+      max_tokens: opts?.maxTokens || this.maxOutputTokens,
       stream: true,
       ...(this.extraBody || {}),
     };
