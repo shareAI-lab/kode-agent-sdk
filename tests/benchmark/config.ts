@@ -9,29 +9,37 @@ const ALL_PROVIDERS: ProviderId[] = ['anthropic', 'openai', 'gemini', 'glm', 'mi
 // ---------------------------------------------------------------------------
 
 export function parseCliArgs(argv: string[] = process.argv.slice(2)): BenchmarkCliArgs {
-  const args: BenchmarkCliArgs = {
-    sweOnly: false,
-    tauOnly: false,
-  };
+  const args: BenchmarkCliArgs = {};
 
   for (const arg of argv) {
-    if (arg === '--swe-only') {
-      args.sweOnly = true;
-    } else if (arg === '--tau-only') {
-      args.tauOnly = true;
-    } else if (arg.startsWith('--swe-mode=')) {
-      const val = arg.slice('--swe-mode='.length);
-      if (val === 'mini' || val === 'full') args.sweMode = val;
-    } else if (arg.startsWith('--tau-domain=')) {
-      args.tauDomain = arg.slice('--tau-domain='.length);
+    if (arg.startsWith('--benchmark=')) {
+      const val = arg.slice('--benchmark='.length);
+      if (val === 'swe' || val === 'tb2' || val === 'both') args.benchmark = val;
     } else if (arg.startsWith('--provider=')) {
       args.provider = arg.slice('--provider='.length);
-    } else if (arg.startsWith('--num-trials=')) {
-      const n = parseInt(arg.slice('--num-trials='.length), 10);
-      if (!isNaN(n) && n > 0) args.numTrials = n;
+    } else if (arg.startsWith('--tb2-model=')) {
+      args.tb2Model = arg.slice('--tb2-model='.length);
+    } else if (arg.startsWith('--model=')) {
+      // Backward-compatible alias for TB2 model.
+      args.tb2Model = arg.slice('--model='.length);
+    } else if (arg.startsWith('--tb2-agent=')) {
+      args.tb2Agent = arg.slice('--tb2-agent='.length);
+    } else if (arg.startsWith('--tb2-dataset=')) {
+      args.tb2Dataset = arg.slice('--tb2-dataset='.length);
+    } else if (arg.startsWith('--tb2-runner=')) {
+      const val = arg.slice('--tb2-runner='.length);
+      if (val === 'auto' || val === 'harbor' || val === 'uvx' || val === 'docker') args.tb2Runner = val;
+    } else if (arg.startsWith('--tb2-python=')) {
+      args.tb2Python = arg.slice('--tb2-python='.length);
+    } else if (arg.startsWith('--tb2-jobs-dir=')) {
+      args.tb2JobsDir = arg.slice('--tb2-jobs-dir='.length);
+    } else if (arg.startsWith('--tb2-env-file=')) {
+      args.tb2EnvFile = arg.slice('--tb2-env-file='.length);
+    } else if (arg.startsWith('--tb2-docker-image=')) {
+      args.tb2DockerImage = arg.slice('--tb2-docker-image='.length);
     } else if (arg.startsWith('--output=')) {
       const val = arg.slice('--output='.length);
-      if (val === 'table' || val === 'json' || val === 'html' || val === 'both') args.output = val;
+      if (val === 'table' || val === 'json') args.output = val;
     } else if (arg.startsWith('--output-file=')) {
       args.outputFile = arg.slice('--output-file='.length);
     } else if (arg.startsWith('--compare=')) {
@@ -71,30 +79,6 @@ function discoverProviders(filterProvider?: string): BenchmarkProvider[] {
   return providers;
 }
 
-function findUserSimProvider(): BenchmarkProvider | undefined {
-  const userModel = process.env.BENCHMARK_USER_MODEL;
-  if (!userModel) return undefined;
-
-  // Format: provider/model  e.g. "anthropic/claude-opus-4-5-20251101"
-  const slashIdx = userModel.indexOf('/');
-  if (slashIdx === -1) return undefined;
-
-  const providerId = userModel.slice(0, slashIdx) as ProviderId;
-  const model = userModel.slice(slashIdx + 1);
-
-  const result = loadProviderEnv(providerId);
-  if (!result.ok || !result.config) return undefined;
-  if (!result.config.apiKey) return undefined;
-
-  return {
-    id: providerId,
-    model,
-    apiKey: result.config.apiKey,
-    baseUrl: result.config.baseUrl,
-    proxyUrl: result.config.proxyUrl,
-  };
-}
-
 function readSdkVersion(): string {
   try {
     const pkg = require('../../package.json');
@@ -106,27 +90,37 @@ function readSdkVersion(): string {
 
 export function loadConfig(cliArgs: BenchmarkCliArgs): BenchmarkConfig {
   const envTimeout = process.env.BENCHMARK_TIMEOUT_MS;
-  const envTrials = process.env.BENCHMARK_NUM_TRIALS;
   const envOutput = process.env.BENCHMARK_OUTPUT;
+  const envTb2Model = process.env.BENCHMARK_TB2_MODEL
+    || (process.env.OPENAI_MODEL_ID ? `openai/${process.env.OPENAI_MODEL_ID}` : undefined);
 
   const timeoutMs = envTimeout ? parseInt(envTimeout, 10) : 120_000;
-  const numTrials = cliArgs.numTrials
-    ?? (envTrials ? parseInt(envTrials, 10) : 1);
   const output = cliArgs.output
-    ?? (envOutput === 'json' || envOutput === 'both' || envOutput === 'table' || envOutput === 'html' ? envOutput : 'table');
+    ?? (envOutput === 'json' || envOutput === 'table' ? envOutput : 'table');
   const outputFile = cliArgs.outputFile ?? 'benchmark-report.json';
-  const sweMode = cliArgs.sweMode ?? 'mini';
-  const tauDomain = cliArgs.tauDomain ?? 'all';
+  const benchmark = cliArgs.benchmark ?? 'both';
+  const tb2Agent = cliArgs.tb2Agent ?? 'oracle';
+  const tb2Dataset = cliArgs.tb2Dataset ?? 'terminal-bench@2.0';
+  const tb2Runner = cliArgs.tb2Runner ?? 'auto';
+  const tb2Python = cliArgs.tb2Python ?? '3.12';
+  const tb2JobsDir = cliArgs.tb2JobsDir ?? 'tests/tmp/jobs';
+  const tb2EnvFile = cliArgs.tb2EnvFile;
+  const tb2DockerImage = cliArgs.tb2DockerImage ?? 'ghcr.io/astral-sh/uv:python3.12-bookworm';
 
   return {
+    benchmark,
     providers: discoverProviders(cliArgs.provider),
-    userSimProvider: findUserSimProvider(),
     timeoutMs,
-    numTrials,
     output,
     outputFile,
-    sweMode,
-    tauDomain,
+    tb2Model: cliArgs.tb2Model ?? envTb2Model,
+    tb2Agent,
+    tb2Dataset,
+    tb2Runner,
+    tb2Python,
+    tb2JobsDir,
+    tb2EnvFile,
+    tb2DockerImage,
     sdkVersion: readSdkVersion(),
     dockerProxy: process.env.BENCHMARK_DOCKER_PROXY || undefined,
   };

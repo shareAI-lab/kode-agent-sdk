@@ -154,7 +154,7 @@ function extractRelevantPaths(problemStatement: string, hintsText: string): stri
 // (readFilesFromRepo removed — we now read directly from Docker images)
 
 // ---------------------------------------------------------------------------
-// LLM interaction — generate fix (file-based, like mini mode)
+// LLM interaction — generate fix (file-based source-context flow)
 // ---------------------------------------------------------------------------
 
 const FULL_SYSTEM_PROMPT = `You are a software engineer fixing bugs in open-source repositories.
@@ -195,7 +195,7 @@ def validate(value):
 --- END FILE ---`;
 
 /**
- * Call the LLM with source file context (like mini mode).
+ * Call the LLM with source file context (source-context flow).
  * Includes a single retry on failure.
  */
 async function callLLMWithContext(
@@ -392,7 +392,7 @@ function generateDiffFromOriginals(
  * 1. Pulling the SWE-bench Docker image (has repo at /testbed)
  * 2. Extracting relevant file paths from the problem statement / hints
  * 3. Reading those files directly from the Docker image
- * 4. Sending source code + problem to LLM (like mini mode)
+ * 4. Sending source code + problem to LLM (source-context flow)
  * 5. Parsing corrected files from LLM response
  * 6. Generating unified diff programmatically
  */

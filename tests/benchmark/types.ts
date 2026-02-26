@@ -1,9 +1,5 @@
 import type { ProviderId } from '../helpers/provider-env';
 
-// ---------------------------------------------------------------------------
-// Provider
-// ---------------------------------------------------------------------------
-
 export interface BenchmarkProvider {
   id: ProviderId;
   model: string;
@@ -12,62 +8,38 @@ export interface BenchmarkProvider {
   proxyUrl?: string;
 }
 
-// ---------------------------------------------------------------------------
-// CLI args
-// ---------------------------------------------------------------------------
-
 export interface BenchmarkCliArgs {
-  sweOnly: boolean;
-  tauOnly: boolean;
-  sweMode?: 'mini' | 'full';
-  tauDomain?: string;
+  benchmark?: 'swe' | 'tb2' | 'both';
   provider?: string;
-  numTrials?: number;
-  output?: 'table' | 'json' | 'html' | 'both';
+  tb2Model?: string;
+  tb2Agent?: string;
+  tb2Dataset?: string;
+  tb2Runner?: 'auto' | 'harbor' | 'uvx' | 'docker';
+  tb2Python?: string;
+  tb2JobsDir?: string;
+  tb2EnvFile?: string;
+  tb2DockerImage?: string;
+  output?: 'table' | 'json';
   outputFile?: string;
   compare?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Config (merged env + CLI)
-// ---------------------------------------------------------------------------
-
 export interface BenchmarkConfig {
+  benchmark: 'swe' | 'tb2' | 'both';
   providers: BenchmarkProvider[];
-  userSimProvider?: BenchmarkProvider;
   timeoutMs: number;
-  numTrials: number;
-  output: 'table' | 'json' | 'html' | 'both';
+  output: 'table' | 'json';
   outputFile: string;
-  sweMode: 'mini' | 'full';
-  tauDomain: string;
+  tb2Model?: string;
+  tb2Agent: string;
+  tb2Dataset: string;
+  tb2Runner: 'auto' | 'harbor' | 'uvx' | 'docker';
+  tb2Python: string;
+  tb2JobsDir: string;
+  tb2EnvFile?: string;
+  tb2DockerImage: string;
   sdkVersion: string;
   dockerProxy?: string;
-}
-
-// ---------------------------------------------------------------------------
-// SWE-bench types
-// ---------------------------------------------------------------------------
-
-export interface SWEInstance {
-  instance_id: string;
-  repo: string;
-  base_commit: string;
-  patch: string;
-  test_patch: string;
-  problem_statement: string;
-  hints_text: string;
-  created_at: string;
-  version: string;
-}
-
-export interface MiniSWECase {
-  id: string;
-  repo: string;
-  description: string;
-  files: Record<string, string>;
-  expected_patch: string;
-  test_command: string;
 }
 
 export interface SWEResult {
@@ -93,60 +65,27 @@ export interface SWEProviderResult {
   results: SWEResult[];
 }
 
-// ---------------------------------------------------------------------------
-// TAU-bench types
-// ---------------------------------------------------------------------------
-
-export interface TAUTask {
-  task_id: string;
-  domain: string;
-  user_instruction: string;
-  expected_actions: string[];
-  tools: string[];
+export interface TB2Summary {
+  generated_at: string;
+  dataset: string;
+  agent: string;
+  model?: string;
+  jobs_dir: string;
+  job_path: string;
+  passed: number;
+  total: number;
+  rate: number;
+  unknown: number;
 }
-
-export interface TAUTaskResult {
-  task_id: string;
-  trial_pass_rates: boolean[];
-  tokens_used: number;
-  error?: string;
-}
-
-export interface TAUSummary {
-  domain: string;
-  total_tasks: number;
-  num_trials: number;
-  pass_at_k: number[];
-  avg_tokens: number;
-}
-
-export interface TAUProviderResult {
-  provider: BenchmarkProvider;
-  summary: TAUSummary;
-  results: TAUTaskResult[];
-}
-
-// ---------------------------------------------------------------------------
-// Top-level report
-// ---------------------------------------------------------------------------
 
 export interface BenchmarkReport {
   timestamp: string;
   sdk_version: string;
   swe?: SWEProviderResult[];
-  tau?: TAUProviderResult[];
+  tb2?: TB2Summary;
 }
-
-// ---------------------------------------------------------------------------
-// Module contract (Phase 2+ modules implement this)
-// ---------------------------------------------------------------------------
 
 export interface BenchmarkModuleResult {
   swe?: SWEProviderResult[];
-  tau?: TAUProviderResult[];
-}
-
-export interface BenchmarkModule {
-  name: string;
-  run(config: BenchmarkConfig): Promise<BenchmarkModuleResult>;
+  tb2?: TB2Summary;
 }

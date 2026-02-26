@@ -1,58 +1,15 @@
 /**
- * Benchmark runner entry point
+ * Unified benchmark runner entry point.
+ * Supports SWE-bench-Verified, Terminal Bench 2.0, or both.
  */
 
 import '../helpers/env-setup';
 import { parseCliArgs, loadConfig } from './config';
-import {
-  printProviderSummary,
-  printSWETable,
-  printTAUTable,
-  writeJsonReport,
-  printNoBenchmarks,
-} from './reporter';
-import { writeHtmlReport } from './html-reporter';
+import { printProviderSummary, printSWETable, printTB2Summary, writeJsonReport } from './reporter';
 import { loadReport, compareReports, printComparison } from './compare';
-import type { BenchmarkCliArgs, BenchmarkConfig, BenchmarkModule, BenchmarkModuleResult, BenchmarkReport } from './types';
-
-// ---------------------------------------------------------------------------
-// Module discovery
-// ---------------------------------------------------------------------------
-
-async function tryLoadModule(path: string): Promise<BenchmarkModule | null> {
-  try {
-    const mod = await import(path);
-    if (mod && typeof mod.run === 'function' && typeof mod.name === 'string') {
-      return mod as BenchmarkModule;
-    }
-    if (mod && mod.default && typeof mod.default.run === 'function') {
-      return mod.default as BenchmarkModule;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function discoverModules(cliArgs: BenchmarkCliArgs): Promise<BenchmarkModule[]> {
-  const modules: BenchmarkModule[] = [];
-
-  if (!cliArgs.tauOnly) {
-    const swe = await tryLoadModule('./swe/index');
-    if (swe) modules.push(swe);
-  }
-
-  if (!cliArgs.sweOnly) {
-    const tau = await tryLoadModule('./tau/index');
-    if (tau) modules.push(tau);
-  }
-
-  return modules;
-}
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
+import type { BenchmarkReport } from './types';
+import { run as runSWE } from './swe';
+import { runTB2Official } from './run-tb2-official';
 
 async function main(): Promise<void> {
   const cliArgs = parseCliArgs();
@@ -60,50 +17,48 @@ async function main(): Promise<void> {
 
   printProviderSummary(config);
 
-  const modules = await discoverModules(cliArgs);
-
-  if (modules.length === 0) {
-    printNoBenchmarks();
-    return;
-  }
-
   const report: BenchmarkReport = {
     timestamp: new Date().toISOString(),
     sdk_version: config.sdkVersion,
   };
 
-  for (const mod of modules) {
-    console.log(`  Running module: ${mod.name} ...`);
-    const result: BenchmarkModuleResult = await mod.run(config);
-
-    if (result.swe) {
-      report.swe = result.swe;
-      for (const r of result.swe) {
+  if (config.benchmark === 'swe' || config.benchmark === 'both') {
+    console.log('  Running module: swe ...');
+    const sweResult = await runSWE(config);
+    if (sweResult.swe) {
+      report.swe = sweResult.swe;
+      for (const r of sweResult.swe) {
         printSWETable(r.summary.dataset, r.summary.total, [r]);
       }
     }
-
-    if (result.tau) {
-      report.tau = result.tau;
-      for (const r of result.tau) {
-        printTAUTable(r.summary.domain, r.summary.total_tasks, r.summary.num_trials, [r]);
-      }
-    }
   }
 
-  if (config.output === 'json' || config.output === 'both') {
+  if (config.benchmark === 'tb2' || config.benchmark === 'both') {
+    console.log('  Running module: tb2 ...');
+    const tb2 = runTB2Official({
+      dataset: config.tb2Dataset,
+      model: config.tb2Model,
+      agent: config.tb2Agent,
+      jobsDir: config.tb2JobsDir,
+      runner: config.tb2Runner,
+      dockerImage: config.tb2DockerImage,
+      python: config.tb2Python,
+      envFile: config.tb2EnvFile,
+    });
+    report.tb2 = tb2;
+    printTB2Summary(tb2);
+  }
+
+  if (!report.swe && !report.tb2) {
+    console.error('  No benchmark results produced. Check prerequisites and benchmark settings.');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (config.output === 'json') {
     writeJsonReport(report, config.outputFile);
   }
 
-  // Always generate HTML report (with timestamp to avoid overwriting)
-  const htmlDir = require('path').resolve(__dirname, '..', 'tmp');
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const htmlPath = cliArgs.outputFile && cliArgs.outputFile.endsWith('.html')
-    ? cliArgs.outputFile
-    : require('path').join(htmlDir, `benchmark-report-${ts}.html`);
-  writeHtmlReport(report, config, htmlPath);
-
-  // Historical comparison
   if (cliArgs.compare) {
     try {
       const baselineReport = loadReport(cliArgs.compare);

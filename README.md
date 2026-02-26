@@ -146,6 +146,7 @@ See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detai
 | [Providers](./docs/en/guides/providers.md) | Model provider configuration |
 | [Database](./docs/en/guides/database.md) | SQLite/PostgreSQL persistence |
 | [Resume & Fork](./docs/en/guides/resume-fork.md) | Crash recovery & branching |
+| [Benchmark Results](./docs/en/guides/benchmark-results.md) | Confirmed benchmark score tables |
 | **Project** | |
 | [Contribution Guide](./docs/en/contribution.md) | How to contribute |
 | **Reference** | |

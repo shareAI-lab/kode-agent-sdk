@@ -106,6 +106,7 @@ npm run example:room               # 多Agent协作
 | [Provider 配置](./docs/zh-CN/guides/providers.md) | 模型 Provider 配置 |
 | [数据库存储](./docs/zh-CN/guides/database.md) | SQLite/PostgreSQL 持久化 |
 | [恢复与分叉](./docs/zh-CN/guides/resume-fork.md) | 崩溃恢复与分支 |
+| [Benchmark 结果](./docs/zh-CN/guides/benchmark-results.md) | 已确认的跑分结果表格 |
 | **项目** | |
 | [贡献指南](./docs/zh-CN/contribution.md) | 提交 PR 的要求与流程 |
 | **参考** | |

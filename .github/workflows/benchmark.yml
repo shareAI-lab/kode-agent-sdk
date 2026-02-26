@@ -1,0 +1,167 @@
+name: Benchmark Full Suite
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark:
+        description: "Which benchmark to run"
+        type: choice
+        required: true
+        default: both
+        options:
+          - both
+          - swe
+          - tb2
+      provider:
+        description: "SWE provider filter"
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - anthropic
+          - openai
+          - gemini
+      tb2_model:
+        description: "TB2 model in provider/model format"
+        type: string
+        required: true
+        default: openai/glm-5
+  push:
+    branches:
+      - add_benchmark_test
+  pull_request:
+    branches:
+      - main
+
+env:
+  NODE_VERSION: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Login to Docker Hub (optional)
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create benchmark environment
+        run: |
+          cat > .env.test << 'EOT'
+          ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL_ID=${{ vars.ANTHROPIC_MODEL_ID }}
+          ANTHROPIC_BASE_URL=${{ vars.ANTHROPIC_BASE_URL }}
+
+          OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL_ID=${{ vars.OPENAI_MODEL_ID }}
+          OPENAI_BASE_URL=${{ vars.OPENAI_BASE_URL }}
+
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL_ID=${{ vars.GEMINI_MODEL_ID }}
+          GEMINI_BASE_URL=${{ vars.GEMINI_BASE_URL }}
+
+          BENCHMARK_DOCKER_PROXY=${{ vars.BENCHMARK_DOCKER_PROXY }}
+          BENCHMARK_TIMEOUT_MS=${{ vars.BENCHMARK_TIMEOUT_MS }}
+          EOT
+
+      - name: Run unified benchmark command
+        run: |
+          mkdir -p tests/tmp
+          args=(
+            --benchmark=${{ inputs.benchmark }}
+            --tb2-model=${{ inputs.tb2_model }}
+            --tb2-agent=oracle
+            --tb2-runner=uvx
+            --tb2-python=3.12
+            --tb2-jobs-dir=./tests/tmp/jobs
+            --output=json
+            --output-file=tests/tmp/benchmark-report.json
+          )
+
+          if [[ "${{ inputs.provider }}" != "all" && "${{ inputs.benchmark }}" != "tb2" ]]; then
+            args+=(--provider=${{ inputs.provider }})
+          fi
+
+          npm run test:benchmark -- "${args[@]}"
+
+      - name: Write step summary
+        if: ${{ always() }}
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('fs');
+          function readJson(p) {
+            if (!fs.existsSync(p)) return null;
+            try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+          }
+
+          const report = readJson('tests/tmp/benchmark-report.json');
+          console.log('## Benchmark Report');
+          console.log('');
+
+          if (!report) {
+            console.log('- report not found');
+            process.exit(0);
+          }
+
+          if (Array.isArray(report.swe) && report.swe.length > 0) {
+            console.log('### SWE-bench-Verified');
+            console.log('');
+            console.log('| Provider / Model | Resolved | Rate |');
+            console.log('|---|---:|---:|');
+            for (const r of report.swe) {
+              const name = `${r.provider.id} / ${r.provider.model}`;
+              const resolved = `${r.summary.resolved}/${r.summary.total}`;
+              const rate = `${(r.summary.rate * 100).toFixed(1)}%`;
+              console.log(`| ${name} | ${resolved} | ${rate} |`);
+            }
+            console.log('');
+          }
+
+          if (report.tb2) {
+            const tb2 = report.tb2;
+            console.log('### Terminal Bench 2.0');
+            console.log('');
+            console.log(`- Agent: \`${tb2.agent}\``);
+            if (tb2.model) console.log(`- Model: \`${tb2.model}\``);
+            console.log(`- Passed: **${tb2.passed}/${tb2.total}**`);
+            console.log(`- Rate: **${(tb2.rate * 100).toFixed(1)}%**`);
+            console.log('');
+          }
+          NODE
+
+      - name: Upload benchmark artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-artifacts-${{ github.run_id }}
+          if-no-files-found: warn
+          path: |
+            tests/tmp/benchmark-report.json
+            tests/tmp/jobs/*/result.json

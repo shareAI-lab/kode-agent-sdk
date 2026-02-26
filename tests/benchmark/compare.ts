@@ -1,13 +1,5 @@
-// ---------------------------------------------------------------------------
-// Benchmark report comparison — compare two JSON reports side-by-side
-// ---------------------------------------------------------------------------
-
 import fs from 'fs';
-import type { BenchmarkReport, SWEProviderResult, TAUProviderResult } from './types';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import type { BenchmarkReport, SWEProviderResult, TB2Summary } from './types';
 
 interface ComparisonRow {
   label: string;
@@ -19,13 +11,9 @@ interface ComparisonRow {
 
 interface ComparisonResult {
   swe: ComparisonRow[];
-  tau: ComparisonRow[];
+  tb2: ComparisonRow[];
   hasRegressions: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function fmtPct(n: number): string {
   return (n * 100).toFixed(1) + '%';
@@ -45,31 +33,20 @@ function lpad(s: string, len: number): string {
   return s.length >= len ? s.slice(0, len) : ' '.repeat(len - s.length) + s;
 }
 
-function deltaStr(oldVal: number, newVal: number, unit: 'pct' | 'tokens' | 'ms'): { text: string; dir: 'better' | 'worse' | 'same' } {
+function deltaStr(
+  oldVal: number,
+  newVal: number,
+  unit: 'pct' | 'tokens',
+): { text: string; dir: 'better' | 'worse' | 'same' } {
   const diff = newVal - oldVal;
   if (Math.abs(diff) < 0.001) return { text: '=', dir: 'same' };
 
   const sign = diff > 0 ? '+' : '';
-  let text: string;
-
-  switch (unit) {
-    case 'pct':
-      text = `${sign}${(diff * 100).toFixed(1)}pp`;
-      return { text, dir: diff > 0 ? 'better' : 'worse' };
-    case 'tokens':
-      text = `${sign}${fmtK(diff)}`;
-      // Lower tokens = better
-      return { text, dir: diff < 0 ? 'better' : 'worse' };
-    case 'ms':
-      text = `${sign}${fmtK(diff)}`;
-      // Lower duration = better
-      return { text, dir: diff < 0 ? 'better' : 'worse' };
+  if (unit === 'pct') {
+    return { text: `${sign}${(diff * 100).toFixed(1)}pp`, dir: diff > 0 ? 'better' : 'worse' };
   }
+  return { text: `${sign}${fmtK(diff)}`, dir: diff < 0 ? 'better' : 'worse' };
 }
-
-// ---------------------------------------------------------------------------
-// Comparison logic
-// ---------------------------------------------------------------------------
 
 function compareSWE(oldResults: SWEProviderResult[], newResults: SWEProviderResult[]): ComparisonRow[] {
   const rows: ComparisonRow[] = [];
@@ -91,111 +68,89 @@ function compareSWE(oldResults: SWEProviderResult[], newResults: SWEProviderResu
       continue;
     }
 
-    // Rate
-    const rateD = deltaStr(oldR.summary.rate, newR.summary.rate, 'pct');
+    const rateDelta = deltaStr(oldR.summary.rate, newR.summary.rate, 'pct');
     rows.push({
       label: `${key} [rate]`,
       oldValue: fmtPct(oldR.summary.rate),
       newValue: fmtPct(newR.summary.rate),
-      delta: rateD.text,
-      direction: rateD.dir,
+      delta: rateDelta.text,
+      direction: rateDelta.dir,
     });
 
-    // Resolved count
     rows.push({
       label: `${key} [resolved]`,
       oldValue: `${oldR.summary.resolved}/${oldR.summary.total}`,
       newValue: `${newR.summary.resolved}/${newR.summary.total}`,
-      delta: newR.summary.resolved === oldR.summary.resolved ? '=' : `${newR.summary.resolved - oldR.summary.resolved > 0 ? '+' : ''}${newR.summary.resolved - oldR.summary.resolved}`,
-      direction: newR.summary.resolved > oldR.summary.resolved ? 'better' : newR.summary.resolved < oldR.summary.resolved ? 'worse' : 'same',
+      delta: newR.summary.resolved === oldR.summary.resolved
+        ? '='
+        : `${newR.summary.resolved - oldR.summary.resolved > 0 ? '+' : ''}${newR.summary.resolved - oldR.summary.resolved}`,
+      direction: newR.summary.resolved > oldR.summary.resolved
+        ? 'better'
+        : newR.summary.resolved < oldR.summary.resolved
+          ? 'worse'
+          : 'same',
     });
 
-    // Avg tokens
-    const tokD = deltaStr(oldR.summary.avg_tokens, newR.summary.avg_tokens, 'tokens');
+    const tokenDelta = deltaStr(oldR.summary.avg_tokens, newR.summary.avg_tokens, 'tokens');
     rows.push({
       label: `${key} [tokens]`,
       oldValue: fmtK(oldR.summary.avg_tokens),
       newValue: fmtK(newR.summary.avg_tokens),
-      delta: tokD.text,
-      direction: tokD.dir,
+      delta: tokenDelta.text,
+      direction: tokenDelta.dir,
     });
   }
 
   return rows;
 }
 
-function compareTAU(oldResults: TAUProviderResult[], newResults: TAUProviderResult[]): ComparisonRow[] {
+function compareTB2(oldTB2?: TB2Summary, newTB2?: TB2Summary): ComparisonRow[] {
+  if (!newTB2) return [];
+  if (!oldTB2) {
+    return [{
+      label: 'tb2 [rate]',
+      oldValue: '-',
+      newValue: fmtPct(newTB2.rate),
+      delta: 'new',
+      direction: 'na',
+    }];
+  }
+
   const rows: ComparisonRow[] = [];
+  const rateDelta = deltaStr(oldTB2.rate, newTB2.rate, 'pct');
+  rows.push({
+    label: 'tb2 [rate]',
+    oldValue: fmtPct(oldTB2.rate),
+    newValue: fmtPct(newTB2.rate),
+    delta: rateDelta.text,
+    direction: rateDelta.dir,
+  });
 
-  for (const newR of newResults) {
-    const key = `${newR.provider.id}/${newR.provider.model} [${newR.summary.domain}]`;
-    const oldR = oldResults.find(
-      r =>
-        r.provider.id === newR.provider.id &&
-        r.provider.model === newR.provider.model &&
-        r.summary.domain === newR.summary.domain,
-    );
-
-    if (!oldR) {
-      const pass1 = newR.summary.pass_at_k[0] ?? 0;
-      rows.push({
-        label: `${key} [pass^1]`,
-        oldValue: '-',
-        newValue: fmtPct(pass1),
-        delta: 'new',
-        direction: 'na',
-      });
-      continue;
-    }
-
-    // Pass^1 (primary metric)
-    const oldPass1 = oldR.summary.pass_at_k[0] ?? 0;
-    const newPass1 = newR.summary.pass_at_k[0] ?? 0;
-    const p1D = deltaStr(oldPass1, newPass1, 'pct');
-    rows.push({
-      label: `${key} [pass^1]`,
-      oldValue: fmtPct(oldPass1),
-      newValue: fmtPct(newPass1),
-      delta: p1D.text,
-      direction: p1D.dir,
-    });
-
-    // Avg tokens
-    const tokD = deltaStr(oldR.summary.avg_tokens, newR.summary.avg_tokens, 'tokens');
-    rows.push({
-      label: `${key} [tokens]`,
-      oldValue: fmtK(oldR.summary.avg_tokens),
-      newValue: fmtK(newR.summary.avg_tokens),
-      delta: tokD.text,
-      direction: tokD.dir,
-    });
-  }
+  rows.push({
+    label: 'tb2 [passed]',
+    oldValue: `${oldTB2.passed}/${oldTB2.total}`,
+    newValue: `${newTB2.passed}/${newTB2.total}`,
+    delta: newTB2.passed === oldTB2.passed
+      ? '='
+      : `${newTB2.passed - oldTB2.passed > 0 ? '+' : ''}${newTB2.passed - oldTB2.passed}`,
+    direction: newTB2.passed > oldTB2.passed ? 'better' : newTB2.passed < oldTB2.passed ? 'worse' : 'same',
+  });
 
   return rows;
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 export function loadReport(filePath: string): BenchmarkReport {
-  const raw = fs.readFileSync(filePath, 'utf-8');
-  return JSON.parse(raw) as BenchmarkReport;
+  return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as BenchmarkReport;
 }
 
 export function compareReports(oldReport: BenchmarkReport, newReport: BenchmarkReport): ComparisonResult {
   const sweRows = compareSWE(oldReport.swe ?? [], newReport.swe ?? []);
-  const tauRows = compareTAU(oldReport.tau ?? [], newReport.tau ?? []);
-  const hasRegressions = [...sweRows, ...tauRows].some(r => r.direction === 'worse');
-
-  return { swe: sweRows, tau: tauRows, hasRegressions };
+  const tb2Rows = compareTB2(oldReport.tb2, newReport.tb2);
+  const hasRegressions = [...sweRows, ...tb2Rows].some(r => r.direction === 'worse');
+  return { swe: sweRows, tb2: tb2Rows, hasRegressions };
 }
 
-export function printComparison(
-  oldPath: string,
-  newPath: string,
-  result: ComparisonResult,
-): void {
+export function printComparison(oldPath: string, newPath: string, result: ComparisonResult): void {
   const banner = '='.repeat(80);
   console.log(`\n${banner}`);
   console.log('Benchmark Comparison');
@@ -204,16 +159,13 @@ export function printComparison(
   console.log(`  Current:   ${newPath}`);
   console.log('');
 
-  const allRows = [...result.swe, ...result.tau];
-
+  const allRows = [...result.swe, ...result.tb2];
   if (allRows.length === 0) {
-    console.log('  No comparable results found.');
-    console.log('');
+    console.log('  No comparable results found.\n');
     return;
   }
 
-  // Print table
-  const maxLabel = Math.max(30, ...allRows.map(r => r.label.length));
+  const maxLabel = Math.max(20, ...allRows.map(r => r.label.length));
   const header = `${pad('Metric', maxLabel)} | ${lpad('Baseline', 10)} | ${lpad('Current', 10)} | ${lpad('Delta', 12)} | Dir`;
   const sep = '-'.repeat(header.length);
 
@@ -230,11 +182,11 @@ export function printComparison(
     console.log('');
   }
 
-  if (result.tau.length > 0) {
-    console.log('--- TAU Comparison ---\n');
+  if (result.tb2.length > 0) {
+    console.log('--- TB2 Comparison ---\n');
     console.log(header);
     console.log(sep);
-    for (const row of result.tau) {
+    for (const row of result.tb2) {
       const dir = row.direction === 'better' ? ' ^' : row.direction === 'worse' ? ' v' : '  ';
       console.log(
         `${pad(row.label, maxLabel)} | ${lpad(row.oldValue, 10)} | ${lpad(row.newValue, 10)} | ${lpad(row.delta, 12)} |${dir}`,
@@ -243,10 +195,6 @@ export function printComparison(
     console.log('');
   }
 
-  if (result.hasRegressions) {
-    console.log('  WARNING: Regressions detected (marked with v)');
-  } else {
-    console.log('  No regressions detected.');
-  }
+  console.log(result.hasRegressions ? '  WARNING: Regressions detected (marked with v)' : '  No regressions detected.');
   console.log('');
 }
