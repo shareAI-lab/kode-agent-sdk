@@ -9,11 +9,13 @@ on:
         required: true
         default: both
         options:
+          - all
           - both
           - swe
+          - tau
           - tb2
       provider:
-        description: "SWE provider filter"
+        description: "SWE/TAU provider filter"
         type: choice
         required: true
         default: all
@@ -22,6 +24,16 @@ on:
           - anthropic
           - openai
           - gemini
+      tau_domain:
+        description: "TAU domain (airline by default for faster runs)"
+        type: choice
+        required: true
+        default: airline
+        options:
+          - airline
+          - retail
+          - telecom
+          - all
       tb2_model:
         description: "TB2 model in provider/model format"
         type: string
@@ -45,6 +57,7 @@ jobs:
     name: Benchmark
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    if: ${{ vars.BENCHMARK_ACTION_ENABLED == '1' }}
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -94,9 +107,15 @@ jobs:
       - name: Run unified benchmark command
         run: |
           mkdir -p tests/tmp
+          benchmark="${{ github.event.inputs.benchmark || 'both' }}"
+          provider="${{ github.event.inputs.provider || 'all' }}"
+          tau_domain="${{ github.event.inputs.tau_domain || 'airline' }}"
+          tb2_model="${{ github.event.inputs.tb2_model || 'openai/glm-5' }}"
+
           args=(
-            --benchmark=${{ inputs.benchmark }}
-            --tb2-model=${{ inputs.tb2_model }}
+            --benchmark=${benchmark}
+            --tau-domain=${tau_domain}
+            --tb2-model=${tb2_model}
             --tb2-agent=oracle
             --tb2-runner=uvx
             --tb2-python=3.12
@@ -105,8 +124,8 @@ jobs:
             --output-file=tests/tmp/benchmark-report.json
           )
 
-          if [[ "${{ inputs.provider }}" != "all" && "${{ inputs.benchmark }}" != "tb2" ]]; then
-            args+=(--provider=${{ inputs.provider }})
+          if [[ "${provider}" != "all" && "${benchmark}" != "tb2" ]]; then
+            args+=(--provider=${provider})
           fi
 
           npm run test:benchmark -- "${args[@]}"
@@ -144,6 +163,24 @@ jobs:
             console.log('');
           }
 
+          if (Array.isArray(report.tau) && report.tau.length > 0) {
+            console.log('### TAU-bench');
+            console.log('');
+            console.log('| Provider / Model | Domain | Pass^1 | Avg Tokens |');
+            console.log('|---|---|---:|---:|');
+            for (const r of report.tau) {
+              const name = `${r.provider.id} / ${r.provider.model}`;
+              const domain = r.summary.domain;
+              const pass1 = `${((r.summary.pass_at_k?.[0] ?? 0) * 100).toFixed(1)}%`;
+              const observed = (r.summary.token_observed_trials ?? 0) > 0;
+              const avgTokens = observed
+                ? (r.summary.avg_tokens >= 1000 ? `${(r.summary.avg_tokens / 1000).toFixed(1)}k` : `${r.summary.avg_tokens}`)
+                : '-';
+              console.log(`| ${name} | ${domain} | ${pass1} | ${avgTokens} |`);
+            }
+            console.log('');
+          }
+
           if (report.tb2) {
             const tb2 = report.tb2;
             console.log('### Terminal Bench 2.0');
@@ -152,6 +189,11 @@ jobs:
             if (tb2.model) console.log(`- Model: \`${tb2.model}\``);
             console.log(`- Passed: **${tb2.passed}/${tb2.total}**`);
             console.log(`- Rate: **${(tb2.rate * 100).toFixed(1)}%**`);
+            if (typeof tb2.avg_total_tokens === 'number' && (tb2.token_observed_trials ?? 0) > 0) {
+              console.log(`- Avg tokens: **${tb2.avg_total_tokens}** (observed ${tb2.token_observed_trials} trials)`);
+            } else {
+              console.log(`- Avg tokens: **N/A**`);
+            }
             console.log('');
           }
           NODE
@@ -165,3 +207,4 @@ jobs:
           path: |
             tests/tmp/benchmark-report.json
             tests/tmp/jobs/*/result.json
+            tests/tmp/tau2-data/simulations/*.json

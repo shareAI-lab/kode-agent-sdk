@@ -300,7 +300,79 @@ function pickResultFromRewardFile(resultJsonPath: string): boolean | undefined {
   }
 }
 
-function scoreJob(jobPath: string): { passed: number; total: number; unknown: number } {
+function asFiniteNumber(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function getPathNumber(obj: unknown, keys: string[]): number | undefined {
+  let cur: unknown = obj;
+  for (const k of keys) {
+    if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return asFiniteNumber(cur);
+}
+
+function findNumberByKeys(obj: unknown, candidates: string[]): number | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  const queue: unknown[] = [obj];
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (!cur || typeof cur !== 'object') continue;
+    if (Array.isArray(cur)) {
+      for (const v of cur) queue.push(v);
+      continue;
+    }
+    for (const [k, v] of Object.entries(cur as Record<string, unknown>)) {
+      if (candidates.includes(k)) {
+        const n = asFiniteNumber(v);
+        if (n !== undefined) return n;
+      }
+      if (v && typeof v === 'object') queue.push(v);
+    }
+  }
+  return undefined;
+}
+
+interface TokenUsage {
+  input?: number;
+  output?: number;
+  cache?: number;
+  total?: number;
+}
+
+function extractTokenUsage(obj: Record<string, any>): TokenUsage {
+  const input = getPathNumber(obj, ['agent_result', 'n_input_tokens'])
+    ?? getPathNumber(obj, ['agent_result', 'usage', 'input_tokens'])
+    ?? findNumberByKeys(obj, ['n_input_tokens', 'input_tokens', 'prompt_tokens']);
+  const output = getPathNumber(obj, ['agent_result', 'n_output_tokens'])
+    ?? getPathNumber(obj, ['agent_result', 'usage', 'output_tokens'])
+    ?? findNumberByKeys(obj, ['n_output_tokens', 'output_tokens', 'completion_tokens']);
+  const cache = getPathNumber(obj, ['agent_result', 'n_cache_tokens'])
+    ?? findNumberByKeys(obj, ['n_cache_tokens', 'cache_tokens']);
+  const total = getPathNumber(obj, ['agent_result', 'n_total_tokens'])
+    ?? getPathNumber(obj, ['agent_result', 'usage', 'total_tokens'])
+    ?? findNumberByKeys(obj, ['n_total_tokens', 'total_tokens']);
+
+  if (total !== undefined) return { input, output, cache, total };
+  if (input !== undefined || output !== undefined || cache !== undefined) {
+    return { input, output, cache, total: (input ?? 0) + (output ?? 0) + (cache ?? 0) };
+  }
+  return {};
+}
+
+interface ScoreJobResult {
+  passed: number;
+  total: number;
+  unknown: number;
+  avg_input_tokens?: number;
+  avg_output_tokens?: number;
+  avg_cache_tokens?: number;
+  avg_total_tokens?: number;
+  token_observed_trials: number;
+}
+
+function scoreJob(jobPath: string): ScoreJobResult {
   const summaryPath = path.resolve(jobPath, 'result.json');
   const allResultFiles = findFilesRecursive(jobPath, 'result.json');
   if (allResultFiles.length === 0) {
@@ -314,6 +386,14 @@ function scoreJob(jobPath: string): { passed: number; total: number; unknown: nu
   let passed = 0;
   let total = 0;
   let unknown = 0;
+  let inputSum = 0;
+  let outputSum = 0;
+  let cacheSum = 0;
+  let totalSum = 0;
+  let inputCount = 0;
+  let outputCount = 0;
+  let cacheCount = 0;
+  let totalCount = 0;
 
   for (const file of resultFiles) {
     try {
@@ -331,10 +411,36 @@ function scoreJob(jobPath: string): { passed: number; total: number; unknown: nu
       } else {
         unknown += 1;
       }
+
+      const usage = extractTokenUsage(data);
+      if (usage.input !== undefined) {
+        inputSum += usage.input;
+        inputCount += 1;
+      }
+      if (usage.output !== undefined) {
+        outputSum += usage.output;
+        outputCount += 1;
+      }
+      if (usage.cache !== undefined) {
+        cacheSum += usage.cache;
+        cacheCount += 1;
+      }
+      if (usage.total !== undefined) {
+        totalSum += usage.total;
+        totalCount += 1;
+      }
     } catch {
       unknown += 1;
     }
   }
+
+  const tokenStats = {
+    avg_input_tokens: inputCount > 0 ? Math.round(inputSum / inputCount) : undefined,
+    avg_output_tokens: outputCount > 0 ? Math.round(outputSum / outputCount) : undefined,
+    avg_cache_tokens: cacheCount > 0 ? Math.round(cacheSum / cacheCount) : undefined,
+    avg_total_tokens: totalCount > 0 ? Math.round(totalSum / totalCount) : undefined,
+    token_observed_trials: totalCount,
+  };
 
   if (total === 0) {
     if (!fs.existsSync(summaryPath)) {
@@ -357,6 +463,7 @@ function scoreJob(jobPath: string): { passed: number; total: number; unknown: nu
             passed: approxPassed,
             total: totalFromSummary,
             unknown: 0,
+            ...tokenStats,
           };
         }
       }
@@ -367,7 +474,7 @@ function scoreJob(jobPath: string): { passed: number; total: number; unknown: nu
     throw new Error(`No parseable pass/fail result found under job path: ${jobPath}`);
   }
 
-  return { passed, total, unknown };
+  return { passed, total, unknown, ...tokenStats };
 }
 
 function runOfficialTB2(args: CliArgs): string {
@@ -445,6 +552,11 @@ export function runTB2Official(options: TB2RunOptions): TB2Summary {
     total: s.total,
     rate: s.total > 0 ? s.passed / s.total : 0,
     unknown: s.unknown,
+    avg_input_tokens: s.avg_input_tokens,
+    avg_output_tokens: s.avg_output_tokens,
+    avg_cache_tokens: s.avg_cache_tokens,
+    avg_total_tokens: s.avg_total_tokens,
+    token_observed_trials: s.token_observed_trials,
   };
 }
 
@@ -454,6 +566,11 @@ function writeSummary(summary: TB2Summary, outputFile?: string): void {
   console.log(`Passed:   ${summary.passed}/${summary.total}`);
   console.log(`Rate:     ${fmtPct(summary.rate)}`);
   console.log(`Unknown:  ${summary.unknown}`);
+  if (summary.token_observed_trials && summary.token_observed_trials > 0 && summary.avg_total_tokens !== undefined) {
+    console.log(`Avg tok:  ${summary.avg_total_tokens} (observed ${summary.token_observed_trials} trials)`);
+  } else {
+    console.log('Avg tok:  N/A');
+  }
 
   if (outputFile) {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });

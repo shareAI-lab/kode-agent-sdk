@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import type { BenchmarkConfig, BenchmarkReport, SWEProviderResult, TB2Summary } from './types';
+import type {
+  BenchmarkConfig,
+  BenchmarkReport,
+  SWEProviderResult,
+  TAUProviderResult,
+  TB2Summary,
+} from './types';
 
 function pad(s: string, len: number): string {
   return s.length >= len ? s.slice(0, len) : s + ' '.repeat(len - s.length);
@@ -48,6 +54,9 @@ function buildTable(columns: Column[], rows: string[][]): string {
 }
 
 export function printProviderSummary(config: BenchmarkConfig): void {
+  const runSWE = config.benchmark === 'swe' || config.benchmark === 'both' || config.benchmark === 'all';
+  const runTAU = config.benchmark === 'tau' || config.benchmark === 'both' || config.benchmark === 'all';
+  const runTB2 = config.benchmark === 'tb2' || config.benchmark === 'both' || config.benchmark === 'all';
   const banner = '='.repeat(80);
   console.log(`\n${banner}`);
   console.log('KODE SDK Benchmark Runner');
@@ -58,18 +67,26 @@ export function printProviderSummary(config: BenchmarkConfig): void {
   console.log(`  Output:        ${config.output}`);
   console.log('');
 
-  if (config.benchmark === 'swe' || config.benchmark === 'both') {
+  if (runSWE || runTAU) {
     if (config.providers.length === 0) {
-      console.log('  SWE providers: (none discovered)');
+      console.log('  Providers:     (none discovered)');
     } else {
-      console.log('  SWE providers:');
+      console.log('  Providers:');
       for (const p of config.providers) {
         console.log(`    - ${p.id} / ${p.model}`);
       }
     }
   }
 
-  if (config.benchmark === 'tb2' || config.benchmark === 'both') {
+  if (runTAU) {
+    console.log(`  TAU domain:    ${config.tauDomain}`);
+    console.log(`  Num trials:    ${config.numTrials}`);
+    if (config.userSimProvider) {
+      console.log(`  User sim:      ${config.userSimProvider.id} / ${config.userSimProvider.model}`);
+    }
+  }
+
+  if (runTB2) {
     console.log(`  TB2 dataset:   ${config.tb2Dataset}`);
     console.log(`  TB2 agent:     ${config.tb2Agent}`);
     if (config.tb2Model) console.log(`  TB2 model:     ${config.tb2Model}`);
@@ -107,12 +124,51 @@ export function printSWETable(dataset: string, instanceCount: number, results: S
   console.log('');
 }
 
+export function printTAUTable(
+  domain: string,
+  taskCount: number,
+  numTrials: number,
+  results: TAUProviderResult[],
+): void {
+  console.log(`\n--- TAU-bench (${domain}) — ${taskCount} tasks, ${numTrials} trials ---\n`);
+
+  const passColumns: Column[] = [];
+  for (let k = 1; k <= numTrials; k++) {
+    passColumns.push({ header: `Pass^${k}`, width: 7, align: 'right' });
+  }
+
+  const columns: Column[] = [
+    { header: 'Provider / Model', width: 36, align: 'left' },
+    ...passColumns,
+    { header: 'Avg Tokens', width: 10, align: 'right' },
+  ];
+
+  const rows = results.map(r => {
+    const passValues = r.summary.pass_at_k.map(v => fmtPct(v));
+    while (passValues.length < numTrials) passValues.push('-');
+    const tokenCell = (r.summary.token_observed_trials ?? 0) > 0 ? fmtK(r.summary.avg_tokens) : '-';
+    return [
+      trunc(`${r.provider.id} / ${r.provider.model}`, 36),
+      ...passValues,
+      tokenCell,
+    ];
+  });
+
+  console.log(buildTable(columns, rows));
+  console.log('');
+}
+
 export function printTB2Summary(summary: TB2Summary): void {
   console.log('\n=== Terminal Bench 2.0 Score ===');
   console.log(`Job path: ${summary.job_path}`);
   console.log(`Passed:   ${summary.passed}/${summary.total}`);
   console.log(`Rate:     ${fmtPct(summary.rate)}`);
   console.log(`Unknown:  ${summary.unknown}`);
+  if ((summary.token_observed_trials ?? 0) > 0 && summary.avg_total_tokens !== undefined) {
+    console.log(`Avg tok:  ${fmtK(summary.avg_total_tokens)} (observed ${summary.token_observed_trials}/${summary.total})`);
+  } else {
+    console.log('Avg tok:  N/A');
+  }
   console.log('');
 }
 

@@ -1,14 +1,15 @@
 /**
  * Unified benchmark runner entry point.
- * Supports SWE-bench-Verified, Terminal Bench 2.0, or both.
+ * Supports SWE-bench-Verified, TAU-bench, Terminal Bench 2.0, or combinations.
  */
 
 import '../helpers/env-setup';
 import { parseCliArgs, loadConfig } from './config';
-import { printProviderSummary, printSWETable, printTB2Summary, writeJsonReport } from './reporter';
+import { printProviderSummary, printSWETable, printTAUTable, printTB2Summary, writeJsonReport } from './reporter';
 import { loadReport, compareReports, printComparison } from './compare';
 import type { BenchmarkReport } from './types';
 import { run as runSWE } from './swe';
+import { run as runTAU } from './tau';
 import { runTB2Official } from './run-tb2-official';
 
 async function main(): Promise<void> {
@@ -22,7 +23,11 @@ async function main(): Promise<void> {
     sdk_version: config.sdkVersion,
   };
 
-  if (config.benchmark === 'swe' || config.benchmark === 'both') {
+  const runSWEFlag = config.benchmark === 'swe' || config.benchmark === 'both' || config.benchmark === 'all';
+  const runTAUFlag = config.benchmark === 'tau' || config.benchmark === 'both' || config.benchmark === 'all';
+  const runTB2Flag = config.benchmark === 'tb2' || config.benchmark === 'both' || config.benchmark === 'all';
+
+  if (runSWEFlag) {
     console.log('  Running module: swe ...');
     const sweResult = await runSWE(config);
     if (sweResult.swe) {
@@ -33,7 +38,18 @@ async function main(): Promise<void> {
     }
   }
 
-  if (config.benchmark === 'tb2' || config.benchmark === 'both') {
+  if (runTAUFlag) {
+    console.log('  Running module: tau ...');
+    const tauResult = await runTAU(config);
+    if (tauResult.tau) {
+      report.tau = tauResult.tau;
+      for (const r of tauResult.tau) {
+        printTAUTable(r.summary.domain, r.summary.total_tasks, r.summary.num_trials, [r]);
+      }
+    }
+  }
+
+  if (runTB2Flag) {
     console.log('  Running module: tb2 ...');
     const tb2 = runTB2Official({
       dataset: config.tb2Dataset,
@@ -49,7 +65,7 @@ async function main(): Promise<void> {
     printTB2Summary(tb2);
   }
 
-  if (!report.swe && !report.tb2) {
+  if (!report.swe && !report.tau && !report.tb2) {
     console.error('  No benchmark results produced. Check prerequisites and benchmark settings.');
     process.exitCode = 1;
     return;

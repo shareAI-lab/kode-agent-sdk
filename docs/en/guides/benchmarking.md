@@ -1,10 +1,12 @@
 # Benchmarking
 
-KODE SDK benchmark runner now has a single entry command and supports three targets:
+KODE SDK benchmark runner now has a single entry command and supports multiple targets:
 
 - `swe`: SWE-bench-Verified only
+- `tau`: TAU-bench only
 - `tb2`: Terminal Bench 2.0 only
-- `both`: run both in one command
+- `both`: run SWE + TAU + TB2
+- `all`: alias of `both` (compatibility)
 
 ## Prerequisites
 
@@ -29,6 +31,7 @@ GEMINI_MODEL_ID=gemini-3-pro-preview
 
 3. Runtime tools:
 - SWE-bench-Verified: Docker is required
+- TAU-bench: `tau2` or `uvx` is required (official TAU2 harness)
 - TB2: `harbor`, `uvx`, or Docker (runner decides by `--tb2-runner`)
 
 ## Unified Command
@@ -39,7 +42,7 @@ npm run test:benchmark -- [flags]
 
 ### Common examples
 
-Run both SWE + TB2 in one command:
+Run SWE + TAU + TB2 in one command:
 
 ```bash
 npm run test:benchmark -- \
@@ -72,12 +75,26 @@ npm run test:benchmark -- \
   --output-file=tests/tmp/tb2-report.json
 ```
 
+Run only TAU-bench (official TAU2 script + dataset):
+
+```bash
+npm run test:benchmark -- \
+  --benchmark=tau \
+  --provider=openai \
+  --tau-domain=airline \
+  --num-trials=1 \
+  --output=json \
+  --output-file=tests/tmp/tau-report.json
+```
+
 ## Flags
 
 | Flag | Description | Default |
 |---|---|---|
-| `--benchmark=swe\|tb2\|both` | Which benchmark(s) to run | `both` |
-| `--provider=...` | SWE provider filter (`anthropic`, `openai`, `gemini`, etc.) | all discovered |
+| `--benchmark=swe\|tau\|tb2\|both\|all` | Which benchmark(s) to run (`both`=`all`) | `both` |
+| `--provider=...` | Provider filter for SWE/TAU (`anthropic`, `openai`, `gemini`, etc.) | all discovered |
+| `--tau-domain=airline\|retail\|telecom\|all` | TAU domain filter | `airline` |
+| `--num-trials=N` | TAU trials per task (Pass^k) | `1` |
 | `--tb2-model=provider/model` | TB2 model id | `BENCHMARK_TB2_MODEL` or `openai/$OPENAI_MODEL_ID` |
 | `--tb2-agent=...` | TB2 agent (`oracle`, etc.) | `oracle` |
 | `--tb2-dataset=...` | TB2 dataset id | `terminal-bench@2.0` |
@@ -92,7 +109,7 @@ npm run test:benchmark -- \
 
 ## Output
 
-With `--output=json`, one report contains both sections:
+With `--output=json`, one report may contain `swe`, `tau`, and `tb2` sections depending on `--benchmark`.
 
 ```json
 {
@@ -118,5 +135,9 @@ With `--output=json`, one report contains both sections:
 ## Notes
 
 - SWE-bench is fixed to **SWE-bench-Verified**. There is no mini/full mode switch anymore.
+- TAU now runs with the official **TAU2** harness (`tau2 run ...`) from Sierra.
+- TAU default domain is `airline` for faster CI/local feedback. Use `--tau-domain=all` when you need full coverage.
+- TAU user simulator can be configured with `BENCHMARK_USER_MODEL=provider/model`.
 - TB2 uses official Harbor run flow (`harbor run -d terminal-bench@2.0 -m ... -a ...`) under the selected runner.
+- TAU/TB2 token stats are extracted from official result files when available; if a runner/agent does not emit usage, it is shown as `N/A`.
 - If Docker image pulls are slow, set `BENCHMARK_DOCKER_PROXY`.

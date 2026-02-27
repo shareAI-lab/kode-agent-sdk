@@ -1,10 +1,12 @@
 # Benchmarking
 
-KODE SDK 的 benchmark 入口已统一为一个命令，支持三种目标：
+KODE SDK 的 benchmark 入口已统一为一个命令，支持多个目标：
 
 - `swe`：只跑 SWE-bench-Verified
+- `tau`：只跑 TAU-bench
 - `tb2`：只跑 Terminal Bench 2.0
-- `both`：一次命令同时跑两者
+- `both`：一次命令跑 SWE + TAU + TB2
+- `all`：`both` 的兼容别名
 
 ## 前置条件
 
@@ -29,6 +31,7 @@ GEMINI_MODEL_ID=gemini-3-pro-preview
 
 3. 运行依赖：
 - SWE-bench-Verified：必须有 Docker
+- TAU-bench：需要 `tau2` 或 `uvx`（官方 TAU2 harness）
 - TB2：`harbor`、`uvx` 或 Docker（由 `--tb2-runner` 决定）
 
 ## 统一命令
@@ -39,7 +42,7 @@ npm run test:benchmark -- [参数]
 
 ### 常用示例
 
-一次命令同时跑 SWE + TB2：
+一次命令同时跑 SWE + TAU + TB2：
 
 ```bash
 npm run test:benchmark -- \
@@ -72,12 +75,26 @@ npm run test:benchmark -- \
   --output-file=tests/tmp/tb2-report.json
 ```
 
+只跑 TAU-bench（官方 TAU2 脚本与数据集）：
+
+```bash
+npm run test:benchmark -- \
+  --benchmark=tau \
+  --provider=openai \
+  --tau-domain=airline \
+  --num-trials=1 \
+  --output=json \
+  --output-file=tests/tmp/tau-report.json
+```
+
 ## 参数说明
 
 | 参数 | 含义 | 默认值 |
 |---|---|---|
-| `--benchmark=swe\|tb2\|both` | 选择要跑的 benchmark | `both` |
-| `--provider=...` | SWE provider 过滤（`anthropic`、`openai`、`gemini` 等） | 自动发现全部 |
+| `--benchmark=swe\|tau\|tb2\|both\|all` | 选择要跑的 benchmark（`both`=`all`） | `both` |
+| `--provider=...` | SWE/TAU 的 provider 过滤（`anthropic`、`openai`、`gemini` 等） | 自动发现全部 |
+| `--tau-domain=airline\|retail\|telecom\|all` | TAU 领域过滤 | `airline` |
+| `--num-trials=N` | TAU 每个任务试验次数（Pass^k） | `1` |
 | `--tb2-model=provider/model` | TB2 模型 ID | `BENCHMARK_TB2_MODEL` 或 `openai/$OPENAI_MODEL_ID` |
 | `--tb2-agent=...` | TB2 agent（如 `oracle`） | `oracle` |
 | `--tb2-dataset=...` | TB2 数据集 ID | `terminal-bench@2.0` |
@@ -92,7 +109,7 @@ npm run test:benchmark -- \
 
 ## 输出格式
 
-使用 `--output=json` 时，单个报告同时包含 SWE 和 TB2：
+使用 `--output=json` 时，报告会按 `--benchmark` 输出 `swe`/`tau`/`tb2` 分区：
 
 ```json
 {
@@ -118,5 +135,9 @@ npm run test:benchmark -- \
 ## 说明
 
 - SWE 已固定为 **SWE-bench-Verified**，不再有 mini/full 模式参数。
+- TAU 已切换为 Sierra 官方 **TAU2** harness（`tau2 run ...`）。
+- TAU 默认领域改为 `airline`，用于更快的本地/CI反馈；需要全量时使用 `--tau-domain=all`。
+- TAU 的用户模拟模型可通过 `BENCHMARK_USER_MODEL=provider/model` 指定。
 - TB2 走官方 Harbor 流程（`harbor run -d terminal-bench@2.0 -m ... -a ...`），由 runner 包装执行。
+- TAU/TB2 的 token 统计会从官方结果文件提取；若 runner/agent 未产出 usage，则显示为 `N/A`。
 - 若 Docker 拉取镜像慢，可设置 `BENCHMARK_DOCKER_PROXY`。

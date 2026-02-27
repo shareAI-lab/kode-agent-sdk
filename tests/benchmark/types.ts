@@ -9,8 +9,10 @@ export interface BenchmarkProvider {
 }
 
 export interface BenchmarkCliArgs {
-  benchmark?: 'swe' | 'tb2' | 'both';
+  benchmark?: 'swe' | 'tau' | 'tb2' | 'both' | 'all';
   provider?: string;
+  tauDomain?: 'airline' | 'retail' | 'telecom' | 'all' | string;
+  numTrials?: number;
   tb2Model?: string;
   tb2Agent?: string;
   tb2Dataset?: string;
@@ -25,9 +27,12 @@ export interface BenchmarkCliArgs {
 }
 
 export interface BenchmarkConfig {
-  benchmark: 'swe' | 'tb2' | 'both';
+  benchmark: 'swe' | 'tau' | 'tb2' | 'both' | 'all';
   providers: BenchmarkProvider[];
+  userSimProvider?: BenchmarkProvider;
   timeoutMs: number;
+  numTrials: number;
+  tauDomain: string;
   output: 'table' | 'json';
   outputFile: string;
   tb2Model?: string;
@@ -65,6 +70,28 @@ export interface SWEProviderResult {
   results: SWEResult[];
 }
 
+export interface TAUTaskResult {
+  task_id: string;
+  trial_pass_rates: boolean[];
+  tokens_used: number;
+  error?: string;
+}
+
+export interface TAUSummary {
+  domain: string;
+  total_tasks: number;
+  num_trials: number;
+  pass_at_k: number[];
+  avg_tokens: number;
+  token_observed_trials?: number;
+}
+
+export interface TAUProviderResult {
+  provider: BenchmarkProvider;
+  summary: TAUSummary;
+  results: TAUTaskResult[];
+}
+
 export interface TB2Summary {
   generated_at: string;
   dataset: string;
@@ -76,16 +103,23 @@ export interface TB2Summary {
   total: number;
   rate: number;
   unknown: number;
+  avg_input_tokens?: number;
+  avg_output_tokens?: number;
+  avg_cache_tokens?: number;
+  avg_total_tokens?: number;
+  token_observed_trials?: number;
 }
 
 export interface BenchmarkReport {
   timestamp: string;
   sdk_version: string;
   swe?: SWEProviderResult[];
+  tau?: TAUProviderResult[];
   tb2?: TB2Summary;
 }
 
 export interface BenchmarkModuleResult {
   swe?: SWEProviderResult[];
+  tau?: TAUProviderResult[];
   tb2?: TB2Summary;
 }
