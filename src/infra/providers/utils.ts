@@ -58,8 +58,8 @@ export function normalizeBaseUrl(url: string): string {
 
 export function normalizeOpenAIBaseUrl(url: string): string {
   let normalized = url.replace(/\/+$/, '');
-  // Auto-append /v1 if not present (for OpenAI-compatible APIs)
-  if (!normalized.endsWith('/v1')) {
+  // Auto-append /v1 if no version path detected (e.g., /v1, /v2, /v4)
+  if (!/\/v\d+$/.test(normalized)) {
     normalized += '/v1';
   }
   return normalized;

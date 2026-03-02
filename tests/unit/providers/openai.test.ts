@@ -10,6 +10,11 @@ runner
     const config = provider.toConfig();
     expect.toEqual(config.baseUrl, 'https://api.openai.com/v1');
   })
+  .test('baseUrl 保留已有版本路径 /v4 (GLM coding endpoint)', async () => {
+    const provider = new OpenAIProvider('test-key', 'any-model', 'https://open.bigmodel.cn/api/coding/paas/v4');
+    const config = provider.toConfig();
+    expect.toEqual(config.baseUrl, 'https://open.bigmodel.cn/api/coding/paas/v4');
+  })
   .test('请求体包含 system 与工具调用结构', async () => {
     const provider = new OpenAIProvider('test-key', 'gpt-4o', 'https://api.openai.com');
     const messages: Message[] = [
