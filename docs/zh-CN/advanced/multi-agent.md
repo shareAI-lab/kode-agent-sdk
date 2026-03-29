@@ -76,8 +76,8 @@ class AgentPool {
     strategy?: 'crash' | 'manual';
   }): Promise<Agent>;
 
-  // 销毁 agent
-  async destroy(agentId: string): Promise<void>;
+  // 删除 agent
+  async delete(agentId: string): Promise<void>;
 }
 ```
 
@@ -190,7 +190,7 @@ deps.toolRegistry.register('task_run', () => taskRunTool);
 
 当 Agent 调用 `task_run` 时：
 
-1. Agent 指定 `agentTemplateId`、`prompt` 和可选的 `context`
+1. Agent 指定 `agentTemplateId`、`prompt`、可选 `context` 与可选 `model`
 2. SDK 使用指定模板创建子 Agent
 3. 子 Agent 处理任务
 4. 结果返回给父 Agent
@@ -203,6 +203,7 @@ interface TaskRunParams {
   prompt: string;           // 详细指令
   agentTemplateId: string;  // 使用的模板 ID
   context?: string;         // 额外上下文
+  model?: string | { provider: string; model: string }; // 可选模型覆盖
 }
 ```
 
@@ -216,6 +217,14 @@ interface TaskRunResult {
   permissionIds?: string[];
 }
 ```
+
+**模型继承说明（`delegateTask`）：**
+- `task_run` 支持可选 `model` 参数；不传时，默认让被委派的子 Agent 复用父 Agent 的 `ModelProvider` 实例。
+- 如果你需要显式控制模型，请直接调用 `agent.delegateTask(...)`：
+  - 不传 `model`：继承父模型实例
+  - `model: string`：保持父 provider 类型，仅覆盖模型 ID（自定义 provider 需配合 `modelFactory`）
+  - `model: { provider, model }`：显式指定 provider + model（provider 与父模型不同时，自定义 provider 通常需配合 `modelFactory`）
+  - `model: ModelProvider`：直接使用传入的 provider 实例
 
 ### 子 Agent 配置
 

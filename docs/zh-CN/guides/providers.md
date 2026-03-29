@@ -247,7 +247,6 @@ const provider = new GeminiProvider(
   {
     thinking: {
       level: 'medium',  // 'minimal' | 'low' | 'medium' | 'high'
-      includeThoughts: true,
     },
   }
 );

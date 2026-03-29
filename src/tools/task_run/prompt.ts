@@ -11,6 +11,10 @@ Instructions:
 - Always provide a concise "description" (3-5 words) and a detailed "prompt" outlining deliverables.
 - REQUIRED: Set "agentTemplateId" to one of the available template IDs below.
 - Optionally supply "context" for extra background information.
+- Optional "model" override:
+  - string: keep parent provider, override model id
+  - { provider, model }: explicitly choose provider + model
+  - omitted: inherit parent model instance
 - The tool returns the sub-agent's final text and any pending permissions.
 
 Available agent templates:

@@ -138,6 +138,11 @@ export interface CompleteResult {
   permissionIds?: string[];
 }
 
+export interface DelegateTaskModelConfig {
+  provider: string;
+  model: string;
+}
+
 export interface StreamOptions {
   since?: Bookmark;
   kinds?: Array<ProgressEvent['type']>;
@@ -692,14 +697,12 @@ export class Agent {
   async delegateTask(config: {
     templateId: string;
     prompt: string;
-    model?: string;
+    model?: string | ModelProvider | DelegateTaskModelConfig;
     tools?: string[];
   }): Promise<CompleteResult> {
+    const parentModelConfig = this.model.toConfig();
     const subAgentConfig: AgentConfig = {
       templateId: config.templateId,
-      modelConfig: config.model
-        ? { provider: 'anthropic', model: config.model }
-        : this.model.toConfig(),
       sandbox: this.sandboxConfig || { kind: 'local', workDir: this.sandbox.workDir },
       tools: config.tools,
       multimodalContinuation: this.multimodalContinuation,
@@ -710,6 +713,31 @@ export class Agent {
         delegatedBy: 'task_tool',
       },
     };
+
+    if (typeof config.model === 'string') {
+      subAgentConfig.modelConfig = {
+        ...parentModelConfig,
+        model: config.model,
+      };
+    } else if (isDelegateTaskModelConfig(config.model)) {
+      const sameProvider = config.model.provider === parentModelConfig.provider;
+      subAgentConfig.modelConfig = sameProvider
+        ? {
+            ...parentModelConfig,
+            model: config.model.model,
+          }
+        : {
+            provider: config.model.provider,
+            model: config.model.model,
+          };
+    } else if (isModelProviderInstance(config.model)) {
+      subAgentConfig.model = config.model;
+    } else if (config.model) {
+      throw new Error('Invalid delegateTask model override: expected string, { provider, model }, or ModelProvider');
+    } else {
+      // Reuse parent model instance to avoid requiring a factory for custom providers.
+      subAgentConfig.model = this.model;
+    }
 
     const subAgent = await Agent.create(subAgentConfig, this.deps);
     subAgent.lineage = [...this.lineage, this.agentId];
@@ -2551,6 +2579,27 @@ function buildToolConfig(id: string, template: AgentTemplateDefinition, template
     return { templates };
   }
   return undefined;
+}
+
+function isModelProviderInstance(value: unknown): value is ModelProvider {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Record<string, any>;
+  return typeof candidate.complete === 'function'
+    && typeof candidate.stream === 'function'
+    && typeof candidate.toConfig === 'function';
+}
+
+function isDelegateTaskModelConfig(value: unknown): value is DelegateTaskModelConfig {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Record<string, any>;
+  return typeof candidate.provider === 'string'
+    && candidate.provider.length > 0
+    && typeof candidate.model === 'string'
+    && candidate.model.length > 0;
 }
 
 function encodeUlid(time: number, length: number, chars: string): string {

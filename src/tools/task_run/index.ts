@@ -15,6 +15,14 @@ export function createTaskRunTool(templates: AgentTemplate[]) {
     throw new Error('Cannot create task_run tool: no agent templates provided');
   }
 
+  const modelOverrideSchema = z.union([
+    z.string().describe('Model ID override while keeping parent provider'),
+    z.object({
+      provider: z.string().describe('Provider ID override (e.g. anthropic/openai/gemini/custom)'),
+      model: z.string().describe('Model ID for the selected provider'),
+    }).describe('Explicit provider + model override'),
+  ]).optional();
+
   const TaskRun = tool({
     name: 'task_run',
     description: DESCRIPTION,
@@ -23,9 +31,10 @@ export function createTaskRunTool(templates: AgentTemplate[]) {
       prompt: z.string().describe('Detailed instructions for the sub-agent'),
       agentTemplateId: z.string().describe('Agent template ID to use for this task'),
       context: z.string().optional().describe('Additional context to append'),
+      model: modelOverrideSchema,
     }),
     async execute(args, ctx: ToolContext) {
-      const { description, prompt, agentTemplateId, context } = args;
+      const { description, prompt, agentTemplateId, context, model } = args;
 
       const template = templates.find((tpl) => tpl.id === agentTemplateId);
 
@@ -54,6 +63,7 @@ export function createTaskRunTool(templates: AgentTemplate[]) {
       const result = await ctx.agent.delegateTask({
         templateId: template.id,
         prompt: detailedPrompt,
+        model,
         tools: template.tools,
       });
 

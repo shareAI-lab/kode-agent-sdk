@@ -76,8 +76,8 @@ class AgentPool {
     strategy?: 'crash' | 'manual';
   }): Promise<Agent>;
 
-  // Destroy an agent
-  async destroy(agentId: string): Promise<void>;
+  // Delete an agent
+  async delete(agentId: string): Promise<void>;
 }
 ```
 
@@ -190,7 +190,7 @@ deps.toolRegistry.register('task_run', () => taskRunTool);
 
 When an Agent calls `task_run`:
 
-1. Agent specifies `agentTemplateId`, `prompt`, and optional `context`
+1. Agent specifies `agentTemplateId`, `prompt`, optional `context`, and optional `model`
 2. SDK creates a sub-Agent with the specified template
 3. Sub-Agent processes the task
 4. Result returns to parent Agent
@@ -203,6 +203,7 @@ interface TaskRunParams {
   prompt: string;           // Detailed instructions
   agentTemplateId: string;  // Template ID to use
   context?: string;         // Additional context
+  model?: string | { provider: string; model: string }; // Optional model override
 }
 ```
 
@@ -216,6 +217,14 @@ interface TaskRunResult {
   permissionIds?: string[];
 }
 ```
+
+**Model Inheritance Notes (`delegateTask`):**
+- `task_run` accepts an optional `model` argument; when omitted, delegated sub-Agents reuse the parent Agent's `ModelProvider` instance.
+- If you need explicit model control, call `agent.delegateTask(...)` directly:
+  - omit `model`: inherit parent model instance
+  - `model: string`: keep parent provider type, override model ID (custom providers require `modelFactory`)
+  - `model: { provider, model }`: explicitly choose provider + model (custom providers usually require `modelFactory` when provider differs)
+  - `model: ModelProvider`: use provided provider instance directly
 
 ### Sub-Agent Configuration
 

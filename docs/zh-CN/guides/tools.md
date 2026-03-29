@@ -60,8 +60,65 @@ const agent = await Agent.create({
 
 ### Task（子代理）
 
-- `task_run`：根据模板池派发子 Agent，支持 `subagent_type`、`context`、`model_name` 参数
-- 模板可以通过 `runtime.subagents` 限制深度与可选模板
+- `task_run`：把复杂任务委派给指定模板的子 Agent。
+- 参数说明：
+  - `description`：任务短标题（建议 3-5 词）
+  - `prompt`：对子 Agent 的详细执行指令
+  - `agentTemplateId`：必须是模板池中已注册的模板 ID
+  - `context`：可选，附加背景信息（会拼接到 prompt 后）
+  - `model`：可选的模型覆盖参数
+    - `string`：沿用父 provider，仅覆盖 model ID
+    - `{ provider, model }`：显式指定 provider + model
+- 返回结果：
+  - `status`：`ok` 或 `paused`
+  - `template`：实际使用的模板 ID
+  - `text`：子 Agent 输出
+  - `permissionIds`：待审批权限 ID 列表（如有）
+- 模板可以通过 `runtime.subagents` 限制递归深度和可选模板。
+
+**最小示例：**
+
+```typescript
+import { createTaskRunTool } from '@shareai-lab/kode-sdk';
+
+const templates = [
+  { id: 'researcher', system: '你负责调研并给出结构化结论。', whenToUse: '需要先检索再总结' },
+  { id: 'writer', system: '你负责把结果整理成可发布文稿。', whenToUse: '需要生成最终文稿' },
+];
+
+const taskRunTool = createTaskRunTool(templates);
+deps.toolRegistry.register('task_run', () => taskRunTool);
+
+// Agent 在工具调用时传参示例：
+// {
+//   "description": "调研竞品定价",
+//   "prompt": "调研 3 个主要竞品，输出价格对比表和建议定价区间。",
+//   "agentTemplateId": "researcher",
+//   "context": "目标市场：北美中小企业",
+//   "model": { "provider": "openai", "model": "gpt-4.1-mini" }
+// }
+```
+
+**常见问题：**
+- `Agent template 'xxx' not found`：`agentTemplateId` 不在传入 `createTaskRunTool(templates)` 的列表中。
+- 无法继续委派：检查模板的 `runtime.subagents` 配置是否限制了可用模板或深度。
+
+**delegateTask 的模型行为（重要）：**
+- `task_run` 中 `model` 是可选参数；不传时，子 Agent 默认复用父 Agent 的 `ModelProvider` 实例。
+- 如果你直接调用 `agent.delegateTask(...)`，模型解析规则为：
+  - 不传 `model`：复用父 `ModelProvider` 实例（不依赖 `modelFactory`）
+  - `model` 为 `string`：沿用父 provider 类型，仅覆盖 model ID（自定义 provider 走这条时需要 `modelFactory`）
+  - `model` 为 `{ provider, model }`：显式指定 provider + model（provider 与父模型不同时，自定义 provider 通常需要 `modelFactory`）
+  - `model` 为 `ModelProvider`：直接使用该实例
+
+```typescript
+// 直接调用并覆盖 model
+await agent.delegateTask({
+  templateId: 'researcher',
+  prompt: '分析竞品并输出定价矩阵。',
+  model: 'gpt-4.1', // 继承父 provider 类型，只覆盖模型 ID
+});
+```
 
 ### Skills 工具
 

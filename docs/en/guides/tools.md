@@ -60,8 +60,65 @@ const agent = await Agent.create({
 
 ### Task (Sub-Agent)
 
-- `task_run`: Dispatch sub-Agents from template pool, supports `subagent_type`, `context`, `model_name` parameters
-- Templates can limit depth and available templates via `runtime.subagents`
+- `task_run`: Delegate complex work to a sub-Agent selected from your template pool.
+- Parameters:
+  - `description`: Short task title (recommended 3-5 words)
+  - `prompt`: Detailed instructions for the sub-Agent
+  - `agentTemplateId`: Must match a registered template ID
+  - `context`: Optional extra background (appended to the prompt)
+  - `model`: Optional model override
+    - `string`: keep parent provider, override model ID
+    - `{ provider, model }`: explicitly choose provider + model
+- Return fields:
+  - `status`: `ok` or `paused`
+  - `template`: Template ID that was used
+  - `text`: Sub-Agent output
+  - `permissionIds`: Pending permission IDs (if any)
+- Templates can restrict delegation depth and allowed template IDs via `runtime.subagents`.
+
+**Minimal Example:**
+
+```typescript
+import { createTaskRunTool } from '@shareai-lab/kode-sdk';
+
+const templates = [
+  { id: 'researcher', system: 'Research and return structured findings.', whenToUse: 'Need search + analysis' },
+  { id: 'writer', system: 'Turn findings into publishable copy.', whenToUse: 'Need final draft' },
+];
+
+const taskRunTool = createTaskRunTool(templates);
+deps.toolRegistry.register('task_run', () => taskRunTool);
+
+// Example tool-call args:
+// {
+//   "description": "Research pricing",
+//   "prompt": "Analyze 3 competitors and provide a price table plus recommended range.",
+//   "agentTemplateId": "researcher",
+//   "context": "Target market: North America SMB",
+//   "model": { "provider": "openai", "model": "gpt-4.1-mini" }
+// }
+```
+
+**Common Errors:**
+- `Agent template 'xxx' not found`: `agentTemplateId` is not in the `createTaskRunTool(templates)` list.
+- Delegation stops unexpectedly: check `runtime.subagents` limits (depth/allowed templates).
+
+**delegateTask Model Behavior (Important):**
+- In `task_run`, `model` is optional. If omitted, sub-Agent reuses parent Agent's `ModelProvider` instance by default.
+- If you call `agent.delegateTask(...)` directly, model resolution is:
+  - `model` omitted: reuse parent `ModelProvider` instance (no `modelFactory` required)
+  - `model` is `string`: keep parent provider type and only override model ID (for custom providers, this path requires `modelFactory`)
+  - `model` is `{ provider, model }`: explicitly choose provider + model (if provider differs from parent, custom providers usually require `modelFactory`)
+  - `model` is `ModelProvider`: use that instance directly
+
+```typescript
+// Direct call with explicit model override
+await agent.delegateTask({
+  templateId: 'researcher',
+  prompt: 'Analyze competitors and produce a pricing matrix.',
+  model: 'gpt-4.1', // same provider type as parent, model id overridden
+});
+```
 
 ### Skills Tool
 

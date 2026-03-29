@@ -130,6 +130,25 @@ Creates a forked Agent from a snapshot.
 async fork(sel?: SnapshotId | { at?: string }): Promise<Agent>
 ```
 
+#### `agent.delegateTask(config)`
+
+Create and run a delegated sub-Agent task (commonly used by `task_run`).
+
+```typescript
+async delegateTask(config: {
+  templateId: string;
+  prompt: string;
+  model?: string | { provider: string; model: string } | ModelProvider;
+  tools?: string[];
+}): Promise<CompleteResult>
+```
+
+**Model resolution rules:**
+- `model` omitted: reuse parent `ModelProvider` instance.
+- `model` is `string`: keep parent provider type and override only model ID (for custom providers, this path requires `modelFactory`).
+- `model` is `{ provider, model }`: explicitly choose provider + model (for custom providers, this path usually requires `modelFactory` when provider differs).
+- `model` is `ModelProvider`: use the provided instance directly.
+
 #### `agent.status()`
 
 Returns current Agent status.
@@ -237,6 +256,8 @@ interface AgentConfig {
   tools?: string[];                    // Tool names to enable
   exposeThinking?: boolean;            // Emit thinking events
   retainThinking?: boolean;            // Keep thinking in message history
+  multimodalContinuation?: 'history';  // Preserve multimodal context across turns
+  multimodalRetention?: { keepRecent?: number };  // Keep recent multimodal items
   overrides?: {
     permission?: PermissionConfig;
     todo?: TodoConfig;
@@ -482,7 +503,7 @@ class AgentTemplateRegistry {
   bulkRegister(templates: AgentTemplateDefinition[]): void;
   has(id: string): boolean;
   get(id: string): AgentTemplateDefinition;
-  list(): string[];
+  list(): AgentTemplateDefinition[];
 }
 ```
 
@@ -521,7 +542,7 @@ class AgentPool {
   async status(agentId: string): Promise<AgentStatus | undefined>;
   async fork(agentId: string, snapshotSel?: SnapshotId | { at?: string }): Promise<Agent>;
   async resume(agentId: string, config: AgentConfig, opts?: { autoRun?: boolean; strategy?: ResumeStrategy }): Promise<Agent>;
-  async destroy(agentId: string): Promise<void>;
+  async delete(agentId: string): Promise<void>;
 }
 ```
 
@@ -573,9 +594,10 @@ import { AnthropicProvider } from '@shareai-lab/kode-sdk';
 const provider = new AnthropicProvider(
   process.env.ANTHROPIC_API_KEY!,
   process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-20250514',
+  process.env.ANTHROPIC_BASE_URL, // optional
+  process.env.HTTPS_PROXY, // optional
   {
     thinking: { enabled: true, budgetTokens: 10000 },
-    cache: { breakpoints: 4 },
   }
 );
 ```
@@ -588,6 +610,8 @@ import { OpenAIProvider } from '@shareai-lab/kode-sdk';
 const provider = new OpenAIProvider(
   process.env.OPENAI_API_KEY!,
   process.env.OPENAI_MODEL_ID ?? 'gpt-4o',
+  process.env.OPENAI_BASE_URL, // optional
+  process.env.HTTPS_PROXY, // optional
   {
     api: 'responses',
     responses: { reasoning: { effort: 'medium' } },
@@ -603,8 +627,10 @@ import { GeminiProvider } from '@shareai-lab/kode-sdk';
 const provider = new GeminiProvider(
   process.env.GOOGLE_API_KEY!,
   process.env.GEMINI_MODEL_ID ?? 'gemini-2.0-flash',
+  process.env.GEMINI_BASE_URL, // optional
+  process.env.HTTPS_PROXY, // optional
   {
-    thinking: { level: 'medium', includeThoughts: true },
+    thinking: { level: 'medium' },
   }
 );
 ```

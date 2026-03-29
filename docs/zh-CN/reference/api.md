@@ -130,6 +130,25 @@ async snapshot(label?: string): Promise<SnapshotId>
 async fork(sel?: SnapshotId | { at?: string }): Promise<Agent>
 ```
 
+#### `agent.delegateTask(config)`
+
+创建并执行被委派的子 Agent 任务（`task_run` 的核心调用路径）。
+
+```typescript
+async delegateTask(config: {
+  templateId: string;
+  prompt: string;
+  model?: string | { provider: string; model: string } | ModelProvider;
+  tools?: string[];
+}): Promise<CompleteResult>
+```
+
+**模型解析规则：**
+- 不传 `model`：复用父 `ModelProvider` 实例。
+- `model` 为 `string`：保持父 provider 类型，仅覆盖模型 ID（自定义 provider 走该路径时需要 `modelFactory`）。
+- `model` 为 `{ provider, model }`：显式指定 provider + model（provider 与父模型不同时，自定义 provider 通常需要 `modelFactory`）。
+- `model` 为 `ModelProvider`：直接使用传入实例。
+
 #### `agent.status()`
 
 返回当前 Agent 状态。
@@ -237,6 +256,8 @@ interface AgentConfig {
   tools?: string[];                    // 要启用的工具名称
   exposeThinking?: boolean;            // 发送思考事件
   retainThinking?: boolean;            // 在消息历史中保留思考
+  multimodalContinuation?: 'history';  // 跨轮保留多模态上下文
+  multimodalRetention?: { keepRecent?: number };  // 保留最近 N 条多模态内容
   overrides?: {
     permission?: PermissionConfig;
     todo?: TodoConfig;
@@ -482,7 +503,7 @@ class AgentTemplateRegistry {
   bulkRegister(templates: AgentTemplateDefinition[]): void;
   has(id: string): boolean;
   get(id: string): AgentTemplateDefinition;
-  list(): string[];
+  list(): AgentTemplateDefinition[];
 }
 ```
 
@@ -521,7 +542,7 @@ class AgentPool {
   async status(agentId: string): Promise<AgentStatus | undefined>;
   async fork(agentId: string, snapshotSel?: SnapshotId | { at?: string }): Promise<Agent>;
   async resume(agentId: string, config: AgentConfig, opts?: { autoRun?: boolean; strategy?: ResumeStrategy }): Promise<Agent>;
-  async destroy(agentId: string): Promise<void>;
+  async delete(agentId: string): Promise<void>;
 }
 ```
 
@@ -573,9 +594,10 @@ import { AnthropicProvider } from '@shareai-lab/kode-sdk';
 const provider = new AnthropicProvider(
   process.env.ANTHROPIC_API_KEY!,
   process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-20250514',
+  process.env.ANTHROPIC_BASE_URL, // 可选
+  process.env.HTTPS_PROXY, // 可选
   {
     thinking: { enabled: true, budgetTokens: 10000 },
-    cache: { breakpoints: 4 },
   }
 );
 ```
@@ -588,6 +610,8 @@ import { OpenAIProvider } from '@shareai-lab/kode-sdk';
 const provider = new OpenAIProvider(
   process.env.OPENAI_API_KEY!,
   process.env.OPENAI_MODEL_ID ?? 'gpt-4o',
+  process.env.OPENAI_BASE_URL, // 可选
+  process.env.HTTPS_PROXY, // 可选
   {
     api: 'responses',
     responses: { reasoning: { effort: 'medium' } },
@@ -603,8 +627,10 @@ import { GeminiProvider } from '@shareai-lab/kode-sdk';
 const provider = new GeminiProvider(
   process.env.GOOGLE_API_KEY!,
   process.env.GEMINI_MODEL_ID ?? 'gemini-2.0-flash',
+  process.env.GEMINI_BASE_URL, // 可选
+  process.env.HTTPS_PROXY, // 可选
   {
-    thinking: { level: 'medium', includeThoughts: true },
+    thinking: { level: 'medium' },
   }
 );
 ```
