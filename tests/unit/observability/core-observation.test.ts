@@ -14,7 +14,7 @@ import { TestRunner, expect } from '../../helpers/utils';
 import { TEST_ROOT } from '../../helpers/fixtures';
 import { ensureCleanDir } from '../../helpers/setup';
 
-const runner = new TestRunner('Observability Phase 1');
+const runner = new TestRunner('Observability Core Observation');
 
 class QueueStreamProvider implements ModelProvider {
   readonly model = 'queue-stream-provider';
