@@ -24,6 +24,11 @@ export {
 } from './core/template';
 export { TodoService, TodoItem, TodoSnapshot } from './core/todo';
 export { TimeBridge } from './core/time-bridge';
+export type {
+  ObservabilityConfig,
+  ObservationPersistenceConfig,
+  OTelBridgeConfig,
+} from './observability';
 
 // Skills
 export { SkillsManager } from './core/skills';
@@ -122,6 +127,79 @@ export {
   mergeSchemas,
   extendSchema,
 } from './tools/type-inference';
+
+// Observability
+export {
+  ObservationCollector,
+  CompositeObservationSink,
+  MemoryObservationSink,
+  MemoryObservationStore,
+  NoopObservationSink,
+  JSONStoreObservationBackend,
+  PostgresStoreObservationBackend,
+  OTLPHttpJsonExporter,
+  OTelObservationSink,
+  PersistedObservationSink,
+  SqliteStoreObservationBackend,
+  applyOTelPolicies,
+  applyObservationRetention,
+  buildBaseOTelAttributes,
+  buildOTLPTraceExportBody,
+  buildObservationSpecificAttributes,
+  createObservationReader,
+  createStoreBackedObservationReader,
+  createOTelExporter,
+  createOTelSpanTranslator,
+  generateRunId,
+  generateSpanId,
+  generateTraceId,
+  getOTelObservationMapping,
+  maskOTelSpan,
+  shouldExportOTelSpan,
+  shouldSampleOTelTrace,
+  toOTelSpanId,
+  toOTelTraceId,
+  translateObservationToOTelSpan,
+} from './observability';
+export type {
+  AgentMetricsSnapshot,
+  AgentRunObservation,
+  BaseObservation,
+  CaptureMode,
+  CompressionObservation,
+  GenerationObservation,
+  ObservationEnvelope,
+  ObservationKind,
+  ObservationListOptions,
+  ObservationQueryOptions,
+  ObservationReader,
+  ObservationRecord,
+  ObservationRunView,
+  ObservationStatus,
+  ObservationSink,
+  ObservationSubscribeOptions,
+  ObservationPruneResult,
+  ObservationQueryBackend,
+  ObservationRetentionPolicy,
+  OTelAttributeNamespace,
+  OTelAttributeValue,
+  OTelExportMode,
+  OTelFetchLike,
+  OTelFilteringPolicy,
+  OTelHttpResponseLike,
+  OTelMaskingPolicy,
+  OTelObservationBridge,
+  OTelSamplingPolicy,
+  OTelSpanData,
+  OTelSpanEvent,
+  OTelSpanExporter,
+  OTelSpanKind,
+  OTLPHttpJsonExporterConfig,
+  PersistedObservationListOptions,
+  PersistedObservationReader,
+  SubagentObservation,
+  ToolObservation,
+} from './observability';
 
 // Utils
 export { generateAgentId } from './utils/agent-id';

@@ -39,13 +39,12 @@ export class TimeBridge {
     const spec = `every:${minutes}m`;
 
     const tick = (due: number) => {
-      this.scheduler.enqueue(async () => {
+      this.scheduler.runExternalTrigger({ taskId: id, spec, kind: 'time' }, async () => {
         const drift = Math.abs(Date.now() - due);
         if (drift > this.driftTolerance) {
           this.logger?.('timebridge:drift', { id, drift, expectedInterval: interval });
         }
         await callback();
-        this.scheduler.notifyExternalTrigger({ taskId: id, spec, kind: 'time' });
       });
       scheduleNext();
     };
@@ -86,13 +85,12 @@ export class TimeBridge {
     };
 
     const tick = (due: number) => {
-      this.scheduler.enqueue(async () => {
+      this.scheduler.runExternalTrigger({ taskId: id, spec: expr, kind: 'cron' }, async () => {
         const drift = Math.abs(Date.now() - due);
         if (drift > this.driftTolerance) {
           this.logger?.('timebridge:drift', { id, drift, spec: expr });
         }
         await callback();
-        this.scheduler.notifyExternalTrigger({ taskId: id, spec: expr, kind: 'cron' });
       });
       scheduleNext();
     };

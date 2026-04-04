@@ -98,6 +98,7 @@ export type ToolCallState =
 
 export interface ToolCallApproval {
   required: boolean;
+  requestedAt?: number;
   decision?: 'allow' | 'deny';
   decidedBy?: string;
   decidedAt?: number;

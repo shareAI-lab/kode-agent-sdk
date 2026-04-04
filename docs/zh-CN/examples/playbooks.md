@@ -153,7 +153,33 @@ const stats = await store.aggregateStats(agent.agentId);
 
 ---
 
-## 6. 组合拳：审批 + 协作 + 调度
+## 6. 观测层读取与应用层 HTTP 包装
+
+- **目标**：从 SDK 读取运行时/持久化 observation，并按你自己的应用边界选择是否通过 HTTP 暴露出去。
+- **示例**：`examples/08-observability-http.ts`
+- **运行**：`npm run example:observability-http`
+- **关键步骤**：
+  1. 通过 `agent.getMetricsSnapshot()` 读取当前指标快照。
+  2. 通过 `agent.getObservationReader()` 或 `agent.subscribeObservations()` 读取运行时 observation。
+  3. 为 `observability.persistence.backend` 配置后端，并用 `createStoreBackedObservationReader(...)` 查询历史数据。
+  4. 在应用代码中自行定义路由、鉴权、租户隔离和响应裁剪。
+- **注意事项**：
+  - 运行时 reader 更适合“现在发生了什么”，持久化 reader 更适合审计与历史视图。
+  - `metadata.__debug` 只能视为内部调试数据，不应直接原样对外暴露。
+  - HTTP、鉴权、限流、Dashboard 都应留在 SDK 外部。
+
+```typescript
+const metrics = agent.getMetricsSnapshot();
+const runtimeReader = agent.getObservationReader();
+const persistedReader = createStoreBackedObservationReader(observationBackend);
+
+const runtime = runtimeReader.listObservations({ limit: 20 });
+const persisted = await persistedReader.listObservations({ agentIds: [agent.agentId], limit: 50 });
+```
+
+---
+
+## 7. 组合拳：审批 + 协作 + 调度
 
 - **场景**：代码审查机器人，Planner 负责拆分任务并分配到不同 Specialist，工具操作需审批，定时提醒确保 SLA。
 - **实现路径**：
@@ -184,5 +210,6 @@ const stats = await store.aggregateStats(agent.agentId);
 
 - [快速开始](../getting-started/quickstart.md)
 - [事件指南](../guides/events.md)
+- [可观测性指南](../guides/observability.md)
 - [多 Agent 系统](../advanced/multi-agent.md)
 - [数据库指南](../guides/database.md)

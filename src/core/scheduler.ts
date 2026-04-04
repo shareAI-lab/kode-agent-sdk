@@ -12,8 +12,16 @@ interface StepTask {
 
 type TriggerKind = 'steps' | 'time' | 'cron';
 
+export interface SchedulerTriggerInfo {
+  taskId: string;
+  spec: string;
+  kind: TriggerKind;
+}
+
 interface SchedulerOptions {
-  onTrigger?: (info: { taskId: string; spec: string; kind: TriggerKind }) => void;
+  onTrigger?: (info: SchedulerTriggerInfo) => void;
+  onTriggerStart?: (info: SchedulerTriggerInfo) => void;
+  onTriggerEnd?: (info: SchedulerTriggerInfo) => void;
 }
 
 export class Scheduler {
@@ -21,9 +29,13 @@ export class Scheduler {
   private readonly listeners = new Set<StepCallback>();
   private queued: Promise<void> = Promise.resolve();
   private readonly onTrigger?: SchedulerOptions['onTrigger'];
+  private readonly onTriggerStart?: SchedulerOptions['onTriggerStart'];
+  private readonly onTriggerEnd?: SchedulerOptions['onTriggerEnd'];
 
   constructor(opts?: SchedulerOptions) {
     this.onTrigger = opts?.onTrigger;
+    this.onTriggerStart = opts?.onTriggerStart;
+    this.onTriggerEnd = opts?.onTriggerEnd;
   }
 
   everySteps(every: number, callback: StepCallback): AgentSchedulerHandle {
@@ -58,8 +70,8 @@ export class Scheduler {
       const shouldTrigger = stepCount - task.lastTriggered >= task.every;
       if (!shouldTrigger) continue;
       task.lastTriggered = stepCount;
-      void Promise.resolve(task.callback({ stepCount }));
-      this.onTrigger?.({ taskId: task.id, spec: `steps:${task.every}`, kind: 'steps' });
+      const info: SchedulerTriggerInfo = { taskId: task.id, spec: `steps:${task.every}`, kind: 'steps' };
+      this.runTriggeredTask(info, () => task.callback({ stepCount }), { emitTrigger: 'before' });
     }
   }
 
@@ -76,7 +88,30 @@ export class Scheduler {
     this.onTrigger?.(info);
   }
 
+  runExternalTrigger(info: { taskId: string; spec: string; kind: 'time' | 'cron' }, callback: TaskCallback): void {
+    this.enqueue(() => this.runTriggeredTask(info, callback, { emitTrigger: 'afterSuccess' }));
+  }
+
   private generateId(prefix: string): string {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
+  private async runTriggeredTask(
+    info: SchedulerTriggerInfo,
+    callback: TaskCallback,
+    opts: { emitTrigger: 'before' | 'afterSuccess' }
+  ): Promise<void> {
+    this.onTriggerStart?.(info);
+    try {
+      if (opts.emitTrigger === 'before') {
+        this.onTrigger?.(info);
+      }
+      await callback();
+      if (opts.emitTrigger === 'afterSuccess') {
+        this.onTrigger?.(info);
+      }
+    } finally {
+      this.onTriggerEnd?.(info);
+    }
   }
 }

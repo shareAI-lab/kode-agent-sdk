@@ -51,6 +51,28 @@ import { MessageQueue, SendOptions as QueueSendOptions } from './agent/message-q
 import { TodoManager } from './agent/todo-manager';
 import { ToolRunner } from './agent/tool-runner';
 import { logger } from '../utils/logger';
+import {
+  AgentMetricsSnapshot,
+  CompositeObservationSink,
+  CompressionObservation,
+  GenerationObservation,
+  ObservationCollector,
+  ObservationEnvelope,
+  ObservationKind,
+  ObservationPersistenceConfig,
+  ObservationReader,
+  ObservationSink,
+  PersistedObservationSink,
+  OTelObservationSink,
+  ObservationSubscribeOptions,
+  ObservabilityConfig,
+  ToolObservation,
+  createObservationReader,
+  generateRunId,
+  generateSpanId,
+  generateTraceId,
+} from '../observability';
+import { UsageStatistics } from '../infra/providers/core/usage';
 
 const CONFIG_VERSION = 'v2.7.0';
 
@@ -98,6 +120,7 @@ export interface AgentConfig {
   };
   context?: ContextManagerOptions;
   metadata?: Record<string, any>;
+  observability?: ObservabilityConfig;
 }
 
 interface AgentMetadata {
@@ -129,6 +152,35 @@ interface PendingPermission {
 
 interface SubAgentRuntime {
   depthRemaining: number;
+}
+
+interface ActiveRunContext {
+  runId: string;
+  traceId: string;
+  spanId: string;
+  parentSpanId?: string;
+  startTime: number;
+  trigger: 'send' | 'complete' | 'resume' | 'scheduler' | 'delegate';
+  step: number;
+  messageCountBefore: number;
+  scheduler?: {
+    taskId: string;
+    spec: string;
+    kind: 'steps' | 'time' | 'cron';
+    triggeredAt: number;
+  };
+}
+
+interface PendingSchedulerRunContext {
+  taskId: string;
+  spec: string;
+  kind: 'steps' | 'time' | 'cron';
+  triggeredAt: number;
+}
+
+interface InheritedObservationContext {
+  traceId?: string;
+  parentSpanId?: string;
 }
 
 export interface CompleteResult {
@@ -183,6 +235,8 @@ export class Agent {
 
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private readonly toolRunner: ToolRunner;
+  private readonly observationCollector: ObservationCollector;
+  private readonly observationReader: ObservationReader;
 
   private messages: Message[] = [];
   private state: AgentRuntimeState = 'READY';
@@ -204,6 +258,9 @@ export class Agent {
   private template: AgentTemplateDefinition;
   private lineage: string[] = [];
   private mediaCache = new Map<string, MediaCacheRecord>();
+  private activeRunContext?: ActiveRunContext;
+  private activeSchedulerTrigger?: PendingSchedulerRunContext;
+  private pendingSchedulerRunContext?: PendingSchedulerRunContext;
 
   private get persistentStore(): Store {
     if (!this.deps.store) {
@@ -217,6 +274,45 @@ export class Agent {
       throw new ResumeError('CORRUPTED_DATA', 'Agent store is not configured.');
     }
     return deps.store;
+  }
+
+  private buildObservationSink(): ObservationSink | undefined {
+    const observability = this.config.observability;
+    const sinks: ObservationSink[] = [];
+
+    if (observability?.sink) {
+      sinks.push(observability.sink);
+    }
+
+    if (observability?.otel && observability.otel.enabled !== false) {
+      sinks.push(new OTelObservationSink(observability.otel));
+    }
+
+    const persistence = observability?.persistence;
+    if (this.shouldEnableObservationPersistence(persistence)) {
+      sinks.push(
+        new PersistedObservationSink(persistence.backend!, {
+          retention: persistence.retention,
+          pruneIntervalMs: persistence.pruneIntervalMs,
+        })
+      );
+    }
+
+    if (sinks.length === 0) {
+      return undefined;
+    }
+
+    if (sinks.length === 1) {
+      return sinks[0];
+    }
+
+    return new CompositeObservationSink(sinks);
+  }
+
+  private shouldEnableObservationPersistence(
+    persistence?: ObservationPersistenceConfig
+  ): persistence is ObservationPersistenceConfig & { backend: NonNullable<ObservationPersistenceConfig['backend']> } {
+    return !!persistence?.backend && persistence.enabled !== false;
   }
 
   constructor(
@@ -274,6 +370,15 @@ export class Agent {
           kind: info.kind,
           triggeredAt: Date.now(),
         });
+      },
+      onTriggerStart: (info) => {
+        this.activeSchedulerTrigger = {
+          ...info,
+          triggeredAt: Date.now(),
+        };
+      },
+      onTriggerEnd: () => {
+        this.activeSchedulerTrigger = undefined;
       },
     });
     const runtimeMeta = { ...(this.template.runtime?.metadata || {}), ...(config.metadata || {}) } as Record<string, any>;
@@ -335,6 +440,13 @@ export class Agent {
       events: this.events,
       remind: (content, options) => this.remind(content, options),
     });
+
+    this.observationCollector = new ObservationCollector(
+      this.agentId,
+      config.observability?.enabled !== false,
+      this.buildObservationSink()
+    );
+    this.observationReader = createObservationReader(this.observationCollector);
 
     this.events.setStore(this.persistentStore, this.agentId);
 
@@ -501,6 +613,9 @@ export class Agent {
   }
 
   async send(message: string | ContentBlock[], options?: SendOptions): Promise<string> {
+    if (this.activeSchedulerTrigger && (options?.kind ?? 'user') === 'user') {
+      this.pendingSchedulerRunContext = { ...this.activeSchedulerTrigger };
+    }
     if (typeof message === 'string') {
       return this.messageQueue.send(message, options);
     }
@@ -525,6 +640,18 @@ export class Agent {
       return this.events.subscribe(channels);
     }
     return this.events.subscribe(channels, { since: opts.since, kinds: opts.kinds });
+  }
+
+  getMetricsSnapshot(): AgentMetricsSnapshot {
+    return this.observationReader.getMetricsSnapshot();
+  }
+
+  subscribeObservations(opts?: ObservationSubscribeOptions): AsyncIterable<ObservationEnvelope> {
+    return this.observationReader.subscribe(opts);
+  }
+
+  getObservationReader(): ObservationReader {
+    return this.observationReader;
   }
 
   getTodos(): TodoItem[] {
@@ -700,6 +827,10 @@ export class Agent {
     model?: string | ModelProvider | DelegateTaskModelConfig;
     tools?: string[];
   }): Promise<CompleteResult> {
+    const subagentStart = Date.now();
+    const traceId = this.activeRunContext?.traceId || generateTraceId();
+    const subagentSpanId = generateSpanId();
+    const parentSpanId = this.activeRunContext?.spanId;
     const parentModelConfig = this.model.toConfig();
     const subAgentConfig: AgentConfig = {
       templateId: config.templateId,
@@ -713,6 +844,10 @@ export class Agent {
         delegatedBy: 'task_tool',
       },
     };
+    this.setInheritedObservationContext(subAgentConfig, {
+      traceId,
+      parentSpanId: subagentSpanId,
+    });
 
     if (typeof config.model === 'string') {
       subAgentConfig.modelConfig = {
@@ -743,7 +878,32 @@ export class Agent {
     subAgent.lineage = [...this.lineage, this.agentId];
     try {
       const result = await subAgent.complete(config.prompt);
+      const childRunId = subAgent.getMetricsSnapshot().currentRunId;
+      this.emitSubagentObservation({
+        traceId,
+        parentSpanId,
+        spanId: subagentSpanId,
+        startTime: subagentStart,
+        childAgentId: subAgent.agentId,
+        childRunId,
+        templateId: config.templateId,
+        delegatedBy: 'task_tool',
+        status: result.status === 'ok' ? 'ok' : 'cancelled',
+      });
       return result;
+    } catch (error: any) {
+      this.emitSubagentObservation({
+        traceId,
+        parentSpanId,
+        spanId: subagentSpanId,
+        startTime: subagentStart,
+        childAgentId: subAgent.agentId,
+        templateId: config.templateId,
+        delegatedBy: 'task_tool',
+        status: 'error',
+        errorMessage: error?.message || 'Subagent execution failed',
+      });
+      throw error;
     } finally {
       await (subAgent as any).sandbox?.dispose?.();
     }
@@ -1014,40 +1174,79 @@ export class Agent {
     this.setState('WORKING');
     this.setBreakpoint('PRE_MODEL');
     let doneEmitted = false;
+    const runContext = this.beginRunObservation('send');
+    const generationStartTime = Date.now();
+    let generationFirstTokenAt: number | undefined;
+    let generationStopReason: string | undefined;
+    let generationUsage: { inputTokens: number; outputTokens: number; totalTokens: number } | undefined;
+    let generationExtendedUsage: UsageStatistics | undefined;
+    let generationInputMessagesForObservation: Message[] = [];
+    let assistantBlocksForObservation: ContentBlock[] = [];
 
     try {
       await this.messageQueue.flush();
       const usage = this.contextManager.analyze(this.messages);
       if (usage.shouldCompress) {
+        const compressionStartTime = Date.now();
+        const messageCountBefore = this.messages.length;
+        const estimatedTokensBefore = usage.totalTokens;
         this.events.emitMonitor({
           channel: 'monitor',
           type: 'context_compression',
           phase: 'start',
         });
 
-        const compression = await this.contextManager.compress(
-          this.messages,
-          this.events.getTimeline(),
-          this.filePool,
-          this.sandbox
-        );
+        try {
+          const compression = await this.contextManager.compress(
+            this.messages,
+            this.events.getTimeline(),
+            this.filePool,
+            this.sandbox
+          );
 
-        if (compression) {
-          this.messages = [...compression.retainedMessages];
-          this.messages.unshift(compression.summary);
-          this.lastSfpIndex = this.messages.length - 1;
-          await this.persistMessages();
-          this.events.emitMonitor({
-            channel: 'monitor',
-            type: 'context_compression',
-            phase: 'end',
-            summary: compression.summary.content.map((block) => (block.type === 'text' ? block.text : JSON.stringify(block))).join('\n'),
-            ratio: compression.ratio,
+          if (compression) {
+            const compressedMessages = [compression.summary, ...compression.retainedMessages];
+            const afterUsage = this.contextManager.analyze(compressedMessages);
+            this.messages = compressedMessages;
+            this.lastSfpIndex = this.messages.length - 1;
+            await this.persistMessages();
+            this.events.emitMonitor({
+              channel: 'monitor',
+              type: 'context_compression',
+              phase: 'end',
+              summary: compression.summary.content.map((block) => (block.type === 'text' ? block.text : JSON.stringify(block))).join('\n'),
+              ratio: compression.ratio,
+            });
+            this.emitCompressionObservation({
+              context: runContext,
+              startTime: compressionStartTime,
+              endTime: Date.now(),
+              messageCountBefore,
+              messageCountAfter: compressedMessages.length,
+              estimatedTokensBefore,
+              estimatedTokensAfter: afterUsage.totalTokens,
+              ratio: compression.ratio,
+              summaryGenerated: true,
+              status: 'ok',
+            });
+          }
+        } catch (error: any) {
+          this.emitCompressionObservation({
+            context: runContext,
+            startTime: compressionStartTime,
+            endTime: Date.now(),
+            messageCountBefore,
+            estimatedTokensBefore,
+            summaryGenerated: false,
+            status: 'error',
+            errorMessage: error?.message || 'Context compression failed',
           });
+          throw error;
         }
       }
 
       await this.hooks.runPreModel(this.messages);
+      generationInputMessagesForObservation = this.cloneMessages(this.messages);
 
       this.setBreakpoint('STREAMING_MODEL');
       let assistantBlocks: ContentBlock[] = [];
@@ -1065,6 +1264,7 @@ export class Agent {
 
       for await (const chunk of stream) {
         if (chunk.type === 'content_block_start') {
+          generationFirstTokenAt ??= Date.now();
           if (chunk.content_block?.type === 'text') {
             currentBlockIndex = chunk.index ?? 0;
             textBuffers.set(currentBlockIndex, '');
@@ -1097,6 +1297,7 @@ export class Agent {
             };
           }
         } else if (chunk.type === 'content_block_delta') {
+          generationFirstTokenAt ??= Date.now();
           if (chunk.delta?.type === 'text_delta') {
             const text = chunk.delta.text ?? '';
             const existing = textBuffers.get(currentBlockIndex) ?? '';
@@ -1129,6 +1330,11 @@ export class Agent {
         } else if (chunk.type === 'message_delta') {
           const inputTokens = (chunk.usage as any)?.input_tokens ?? 0;
           const outputTokens = (chunk.usage as any)?.output_tokens ?? 0;
+          generationUsage = {
+            inputTokens,
+            outputTokens,
+            totalTokens: inputTokens + outputTokens,
+          };
           if (inputTokens || outputTokens) {
             this.events.emitMonitor({
               channel: 'monitor',
@@ -1138,6 +1344,9 @@ export class Agent {
               totalTokens: inputTokens + outputTokens,
             });
           }
+        } else if (chunk.type === 'message_stop') {
+          generationStopReason = chunk.stop_reason ?? generationStopReason;
+          generationExtendedUsage = chunk.extendedUsage ?? generationExtendedUsage;
         } else if (chunk.type === 'content_block_stop') {
           if (assistantBlocks[currentBlockIndex]?.type === 'text') {
             const fullText = textBuffers.get(currentBlockIndex) ?? '';
@@ -1154,6 +1363,7 @@ export class Agent {
 
       assistantBlocks = this.compactContentBlocks(assistantBlocks);
       assistantBlocks = this.splitThinkBlocksIfNeeded(assistantBlocks);
+      assistantBlocksForObservation = assistantBlocks;
 
       await this.hooks.runPostModel({ role: 'assistant', content: assistantBlocks } as any);
 
@@ -1167,6 +1377,18 @@ export class Agent {
       await this.persistMessages();
 
       const toolBlocks = assistantBlocks.filter((block) => block.type === 'tool_use');
+      this.emitGenerationObservation({
+        context: runContext,
+        startTime: generationStartTime,
+        endTime: Date.now(),
+        firstTokenAt: generationFirstTokenAt,
+        inputMessages: generationInputMessagesForObservation,
+        assistantBlocks: assistantBlocksForObservation,
+        usage: generationUsage,
+        extendedUsage: generationExtendedUsage,
+        stopReason: generationStopReason,
+        status: 'ok',
+      });
       if (toolBlocks.length > 0) {
         this.setBreakpoint('TOOL_PENDING');
         const outcomes = await this.executeTools(toolBlocks);
@@ -1177,6 +1399,7 @@ export class Agent {
           await this.persistMessages();
           this.todoManager.onStep();
           this.ensureProcessing();
+          this.finishRunObservation(runContext, 'ok');
           return;
         }
       } else {
@@ -1199,7 +1422,21 @@ export class Agent {
         await this.persistInfo();
       }
       this.events.emitMonitor({ channel: 'monitor', type: 'step_complete', step: this.stepCount, bookmark: envelope.bookmark });
+      this.finishRunObservation(runContext, 'ok');
     } catch (error: any) {
+      this.emitGenerationObservation({
+        context: runContext,
+        startTime: generationStartTime,
+        endTime: Date.now(),
+        firstTokenAt: generationFirstTokenAt,
+        inputMessages: generationInputMessagesForObservation,
+        assistantBlocks: assistantBlocksForObservation,
+        usage: generationUsage,
+        extendedUsage: generationExtendedUsage,
+        stopReason: generationStopReason,
+        status: 'error',
+        errorMessage: error?.message || 'Model execution failed',
+      });
       this.events.emitMonitor({
         channel: 'monitor',
         type: 'error',
@@ -1225,6 +1462,7 @@ export class Agent {
           await this.persistInfo();
         }
       }
+      this.finishRunObservation(runContext, 'error', error?.message || 'Model execution failed');
     } finally {
       this.setState('READY');
       this.setBreakpoint('READY');
@@ -1277,6 +1515,7 @@ export class Agent {
       const message = `Tool not found: ${toolUse.name}`;
       this.updateToolRecord(record.id, { state: 'FAILED', error: message, isError: true }, 'tool missing');
       this.events.emitMonitor({ channel: 'monitor', type: 'error', severity: 'warn', phase: 'tool', message });
+      this.emitToolObservation(record.id);
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
@@ -1288,6 +1527,7 @@ export class Agent {
     if (!validation.ok) {
       const message = validation.error || 'Tool input validation failed';
       this.updateToolRecord(record.id, { state: 'FAILED', error: message, isError: true }, 'input schema invalid');
+      this.emitToolObservation(record.id);
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
@@ -1320,12 +1560,13 @@ export class Agent {
           isError: true,
         },
         'policy deny'
-      );
-      this.setBreakpoint('POST_TOOL');
-      this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
-      return this.makeToolResult(toolUse.id, {
-        ok: false,
-        error: message,
+          );
+          this.setBreakpoint('POST_TOOL');
+          this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
+          this.emitToolObservation(record.id);
+          return this.makeToolResult(toolUse.id, {
+            ok: false,
+            error: message,
         recommendations: ['检查模板或权限配置的 allow/deny 列表', '如需执行该工具，请调整权限模式或审批策略'],
       });
     }
@@ -1378,6 +1619,7 @@ export class Agent {
         this.events.emitMonitor({ channel: 'monitor', type: 'tool_executed', call: this.snapshotToolRecord(record.id) });
         this.setBreakpoint('POST_TOOL');
         this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
+        this.emitToolObservation(record.id);
         return this.makeToolResult(toolUse.id, { ok: true, data: decision.result });
       }
     }
@@ -1390,6 +1632,7 @@ export class Agent {
         this.updateToolRecord(record.id, { state: 'DENIED', error: message, isError: true }, 'approval denied');
         this.setBreakpoint('POST_TOOL');
         this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
+        this.emitToolObservation(record.id);
         return this.makeToolResult(toolUse.id, { ok: false, error: message });
       }
       this.setBreakpoint('PRE_TOOL');
@@ -1443,6 +1686,7 @@ export class Agent {
           resultData = (outcome.content as any).data;
         }
 
+        this.emitToolObservation(record.id);
         return this.makeToolResult(toolUse.id, { ok: true, data: resultData });
       } else {
         const errorContent = outcome.content as any;
@@ -1482,6 +1726,7 @@ export class Agent {
 
         const recommendations = errorContent?.recommendations || this.getErrorRecommendations(errorType, toolUse.name);
 
+        this.emitToolObservation(record.id);
         return this.makeToolResult(toolUse.id, {
           ok: false,
           error: errorMessage,
@@ -1522,6 +1767,7 @@ export class Agent {
         ? ['检查是否手动中断', '根据需要重新触发工具', '考虑调整超时时间']
         : this.getErrorRecommendations('runtime', toolUse.name);
 
+      this.emitToolObservation(record.id);
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
@@ -1595,6 +1841,357 @@ export class Agent {
   private preview(value: any, limit = 200): string {
     const text = typeof value === 'string' ? value : JSON.stringify(value);
     return text.length > limit ? `${text.slice(0, limit)}…` : text;
+  }
+
+  private beginRunObservation(
+    trigger: 'send' | 'complete' | 'resume' | 'scheduler' | 'delegate' = 'send'
+  ): ActiveRunContext {
+    const inherited = this.getInheritedObservationContext();
+
+    const schedulerContext = trigger === 'send' ? this.pendingSchedulerRunContext : undefined;
+    const resolvedTrigger = schedulerContext ? 'scheduler' : trigger;
+
+    const context: ActiveRunContext = {
+      runId: generateRunId(),
+      traceId: inherited.traceId || generateTraceId(),
+      spanId: generateSpanId(),
+      parentSpanId: inherited.parentSpanId,
+      startTime: Date.now(),
+      trigger: resolvedTrigger,
+      step: this.stepCount,
+      messageCountBefore: this.messages.length,
+      scheduler: schedulerContext,
+    };
+
+    this.activeRunContext = context;
+    if (schedulerContext) {
+      this.pendingSchedulerRunContext = undefined;
+    }
+    return context;
+  }
+
+  private finishRunObservation(
+    context: ActiveRunContext | undefined,
+    status: 'ok' | 'error' | 'cancelled',
+    errorMessage?: string
+  ): void {
+    if (!context) return;
+    this.observationCollector.record({
+      kind: 'agent_run',
+      agentId: this.agentId,
+      runId: context.runId,
+      traceId: context.traceId,
+      spanId: context.spanId,
+      parentSpanId: context.parentSpanId,
+      name: `agent_run:${this.template.id}`,
+      status,
+      startTime: context.startTime,
+      endTime: Date.now(),
+      durationMs: Date.now() - context.startTime,
+      trigger: context.trigger,
+      step: context.step,
+      messageCountBefore: context.messageCountBefore,
+      messageCountAfter: this.messages.length,
+      errorMessage,
+      metadata: {
+        templateId: this.template.id,
+        ...(context.scheduler ? { scheduler: { ...context.scheduler } } : {}),
+      },
+    });
+    if (this.activeRunContext?.runId === context.runId) {
+      this.activeRunContext = undefined;
+    }
+  }
+
+  private summarizeObservationValue(value: any, mode: 'off' | 'summary' | 'full' | 'redacted' = 'summary'): unknown {
+    if (mode === 'off' || value === undefined) {
+      return undefined;
+    }
+    if (mode === 'full') {
+      return value;
+    }
+    const text = typeof value === 'string' ? value : JSON.stringify(value);
+    const summary = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+    if (mode === 'redacted') {
+      return summary
+        .replace(/sk-[a-zA-Z0-9_-]+/g, 'sk-***')
+        .replace(/Bearer\\s+[A-Za-z0-9._-]+/g, 'Bearer ***');
+    }
+    return summary;
+  }
+
+  private cloneMessages(messages: Message[]): Message[] {
+    return messages.map((message) => ({
+      ...message,
+      content: message.content.map((block) => ({ ...block })) as ContentBlock[],
+      metadata: message.metadata ? { ...message.metadata } : undefined,
+    }));
+  }
+
+  private sanitizePersistedMetadata(metadata?: Record<string, any>): Record<string, any> | undefined {
+    if (!metadata) {
+      return metadata;
+    }
+
+    const sanitized = { ...metadata };
+    delete sanitized.__observationTraceId;
+    delete sanitized.__observationParentSpanId;
+    return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+  }
+
+  private emitGenerationObservation(params: {
+    context?: ActiveRunContext;
+    startTime: number;
+    endTime: number;
+    firstTokenAt?: number;
+    inputMessages: Message[];
+    assistantBlocks: ContentBlock[];
+    usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+    extendedUsage?: UsageStatistics;
+    stopReason?: string;
+    status: 'ok' | 'error';
+    errorMessage?: string;
+  }): void {
+    const context = params.context;
+    if (!context) return;
+
+    const config = this.model.toConfig();
+    const capture = this.config.observability?.capture;
+    const extendedUsage = params.extendedUsage;
+    const usage = extendedUsage
+      ? {
+          inputTokens: extendedUsage.inputTokens,
+          outputTokens: extendedUsage.outputTokens,
+          totalTokens: extendedUsage.totalTokens,
+          reasoningTokens: extendedUsage.reasoningTokens,
+          cacheCreationTokens: extendedUsage.cache.cacheCreationTokens,
+          cacheReadTokens: extendedUsage.cache.cacheReadTokens,
+        }
+      : params.usage;
+    const durationMs = params.endTime - params.startTime;
+    const timeToFirstTokenMs =
+      params.firstTokenAt !== undefined ? Math.max(0, params.firstTokenAt - params.startTime) : undefined;
+    const metadata: Record<string, unknown> = {
+      templateId: this.template.id,
+    };
+
+    if (extendedUsage) {
+      // Keep provider/debug usage available for troubleshooting, but do not
+      // expose it as a first-class stable observation field.
+      metadata.__debug = {
+        extendedUsage,
+      };
+    }
+
+    const observation: GenerationObservation = {
+      kind: 'generation',
+      agentId: this.agentId,
+      runId: context.runId,
+      traceId: context.traceId,
+      spanId: generateSpanId(),
+      parentSpanId: context.spanId,
+      name: `generation:${config.model}`,
+      status: params.status,
+      startTime: params.startTime,
+      endTime: params.endTime,
+      durationMs,
+      provider: config.provider,
+      model: config.model,
+      requestId: extendedUsage?.request.requestId,
+      inputSummary: this.summarizeObservationValue(params.inputMessages, capture?.generationInput),
+      outputSummary: this.summarizeObservationValue(params.assistantBlocks, capture?.generationOutput),
+      usage,
+      cost: extendedUsage?.cost,
+      request: {
+        latencyMs: extendedUsage?.request.latencyMs ?? durationMs,
+        timeToFirstTokenMs: extendedUsage?.request.timeToFirstTokenMs ?? timeToFirstTokenMs,
+        tokensPerSecond: extendedUsage?.request.tokensPerSecond,
+        stopReason: extendedUsage?.request.stopReason ?? params.stopReason,
+        retryCount: extendedUsage?.request.retryCount,
+      },
+      errorMessage: params.errorMessage,
+      metadata,
+    };
+
+    this.observationCollector.record(observation);
+  }
+
+  private getInheritedObservationContext(): InheritedObservationContext {
+    const configWithInternal = this.config as AgentConfig & {
+      __observationTraceId?: string;
+      __observationParentSpanId?: string;
+    };
+    const metadata = this.config.metadata || {};
+    return {
+      traceId:
+        typeof configWithInternal.__observationTraceId === 'string'
+          ? configWithInternal.__observationTraceId
+          : typeof metadata.__observationTraceId === 'string'
+            ? metadata.__observationTraceId
+            : undefined,
+      parentSpanId:
+        typeof configWithInternal.__observationParentSpanId === 'string'
+          ? configWithInternal.__observationParentSpanId
+          : typeof metadata.__observationParentSpanId === 'string'
+            ? metadata.__observationParentSpanId
+            : undefined,
+    };
+  }
+
+  private setInheritedObservationContext(config: AgentConfig, context: InheritedObservationContext): void {
+    const target = config as AgentConfig & {
+      __observationTraceId?: string;
+      __observationParentSpanId?: string;
+    };
+    target.__observationTraceId = context.traceId;
+    target.__observationParentSpanId = context.parentSpanId;
+  }
+
+  private emitToolObservation(recordId: string): void {
+    const record = this.toolRecords.get(recordId);
+    const context = this.activeRunContext;
+    if (!record || !context) return;
+
+    const capture = this.config.observability?.capture;
+    const approval = this.buildToolApprovalObservation(record);
+    const observation: ToolObservation = {
+      kind: 'tool',
+      agentId: this.agentId,
+      runId: context.runId,
+      traceId: context.traceId,
+      spanId: generateSpanId(),
+      parentSpanId: context.spanId,
+      name: `tool:${record.name}`,
+      status: record.state === 'COMPLETED' ? 'ok' : 'error',
+      startTime: record.startedAt ?? record.createdAt,
+      endTime: record.completedAt ?? record.updatedAt,
+      durationMs: record.durationMs,
+      toolCallId: record.id,
+      toolName: record.name,
+      toolState: record.state,
+      approvalRequired: record.approval.required,
+      approval,
+      inputSummary: this.summarizeObservationValue(record.input, capture?.toolInput),
+      outputSummary: this.summarizeObservationValue(record.result, capture?.toolOutput),
+      errorMessage: record.error,
+      metadata: {
+        isError: record.isError ?? false,
+      },
+    };
+
+    this.observationCollector.record(observation);
+  }
+
+  private buildToolApprovalObservation(record: ToolCallRecord): ToolObservation['approval'] {
+    const approval = record.approval;
+    if (!approval.required) {
+      return {
+        required: false,
+        status: 'not_required',
+      };
+    }
+
+    let status: 'pending' | 'approved' | 'denied';
+    if (!approval.decision) {
+      status = 'pending';
+    } else if (approval.decision === 'allow') {
+      status = 'approved';
+    } else {
+      status = 'denied';
+    }
+
+    const requestedAt = approval.requestedAt;
+    const decidedAt = approval.decidedAt;
+    const waitMs =
+      requestedAt !== undefined && decidedAt !== undefined ? Math.max(0, decidedAt - requestedAt) : undefined;
+
+    return {
+      required: true,
+      status,
+      approvalId: record.id,
+      requestedAt,
+      decidedAt,
+      waitMs,
+      noteSummary: this.summarizeObservationValue(approval.note, 'redacted') as string | undefined,
+    };
+  }
+
+  private emitCompressionObservation(params: {
+    context?: ActiveRunContext;
+    startTime: number;
+    endTime: number;
+    messageCountBefore: number;
+    messageCountAfter?: number;
+    estimatedTokensBefore?: number;
+    estimatedTokensAfter?: number;
+    ratio?: number;
+    summaryGenerated: boolean;
+    status: 'ok' | 'error';
+    errorMessage?: string;
+  }): void {
+    const context = params.context;
+    if (!context) return;
+
+    const observation: CompressionObservation = {
+      kind: 'compression',
+      agentId: this.agentId,
+      runId: context.runId,
+      traceId: context.traceId,
+      spanId: generateSpanId(),
+      parentSpanId: context.spanId,
+      name: 'compression:context_window',
+      status: params.status,
+      startTime: params.startTime,
+      endTime: params.endTime,
+      durationMs: params.endTime - params.startTime,
+      policy: 'context_window',
+      reason: 'token_threshold',
+      messageCountBefore: params.messageCountBefore,
+      messageCountAfter: params.messageCountAfter,
+      estimatedTokensBefore: params.estimatedTokensBefore,
+      estimatedTokensAfter: params.estimatedTokensAfter,
+      ratio: params.ratio,
+      summaryGenerated: params.summaryGenerated,
+      errorMessage: params.errorMessage,
+      metadata: {
+        templateId: this.template.id,
+      },
+    };
+
+    this.observationCollector.record(observation);
+  }
+
+  private emitSubagentObservation(params: {
+    traceId: string;
+    parentSpanId?: string;
+    spanId: string;
+    startTime: number;
+    childAgentId: string;
+    childRunId?: string;
+    templateId: string;
+    delegatedBy?: string;
+    status: 'ok' | 'error' | 'cancelled';
+    errorMessage?: string;
+  }): void {
+    const runId = this.activeRunContext?.runId ?? generateRunId();
+    this.observationCollector.record({
+      kind: 'subagent',
+      agentId: this.agentId,
+      runId,
+      traceId: params.traceId,
+      spanId: params.spanId,
+      parentSpanId: params.parentSpanId,
+      name: `subagent:${params.templateId}`,
+      status: params.status,
+      startTime: params.startTime,
+      endTime: Date.now(),
+      durationMs: Date.now() - params.startTime,
+      childAgentId: params.childAgentId,
+      childRunId: params.childRunId,
+      templateId: params.templateId,
+      delegatedBy: params.delegatedBy,
+      errorMessage: params.errorMessage,
+    });
   }
 
   private validateBlocks(blocks: ContentBlock[]): void {
@@ -1910,6 +2507,7 @@ export class Agent {
   private async requestPermission(id: string, _toolName: string, _args: any, meta?: any): Promise<'allow' | 'deny'> {
     const approval: ToolCallApproval = {
       required: true,
+      requestedAt: Date.now(),
       decision: undefined,
       decidedAt: undefined,
       decidedBy: undefined,
@@ -1925,7 +2523,7 @@ export class Agent {
           this.updateToolRecord(
             id,
             {
-              approval: buildApproval(decision, 'api', note),
+              approval: buildApproval(decision, 'api', note, this.toolRecords.get(id)?.approval),
               state: decision === 'allow' ? 'APPROVED' : 'DENIED',
               error: decision === 'deny' ? note : undefined,
               isError: decision === 'deny',
@@ -2200,7 +2798,7 @@ export class Agent {
       createdAt: this.createdAt,
       updatedAt: new Date().toISOString(),
       configVersion: CONFIG_VERSION,
-      metadata: this.config.metadata,
+      metadata: this.sanitizePersistedMetadata(this.config.metadata),
       lineage: this.lineage,
       breakpoint: this.breakpoints.getCurrent(),
     };
@@ -2613,12 +3211,19 @@ function encodeUlid(time: number, length: number, chars: string): string {
   return encoded.join('');
 }
 
-function buildApproval(decision: 'allow' | 'deny', by: string, note?: string): ToolCallApproval {
+function buildApproval(
+  decision: 'allow' | 'deny',
+  by: string,
+  note?: string,
+  existing?: ToolCallApproval
+): ToolCallApproval {
   return {
-    required: true,
+    required: existing?.required ?? true,
+    requestedAt: existing?.requestedAt,
     decision,
     decidedBy: by,
     decidedAt: Date.now(),
     note,
+    meta: existing?.meta,
   };
 }

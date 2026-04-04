@@ -90,6 +90,48 @@ export OPEN_SANDBOX_ENDPOINT=http://127.0.0.1:8080  # optional
 export OPEN_SANDBOX_IMAGE=ubuntu                     # optional
 ```
 
+## Observability
+
+KODE keeps observability as an SDK-facing capability first:
+
+- runtime metrics via `agent.getMetricsSnapshot()`
+- runtime observations via `agent.getObservationReader()` / `agent.subscribeObservations()`
+- optional OTEL bridge via `observability.otel`
+- optional persisted observation query via `observability.persistence`
+
+Minimal persisted-observation example:
+
+```typescript
+import {
+  Agent,
+  JSONStore,
+  JSONStoreObservationBackend,
+  createStoreBackedObservationReader,
+} from '@shareai-lab/kode-sdk';
+
+const storeDir = './.kode';
+const observationBackend = new JSONStoreObservationBackend(storeDir);
+
+const agent = await Agent.create({
+  templateId: 'assistant',
+  observability: {
+    persistence: {
+      backend: observationBackend,
+    },
+  },
+}, deps);
+
+const runtimeSnapshot = agent.getMetricsSnapshot();
+const runtimeObservations = agent.getObservationReader().listObservations();
+
+const persistedReader = createStoreBackedObservationReader(observationBackend);
+const persistedObservations = await persistedReader.listObservations({ limit: 50 });
+```
+
+If you want to expose these metrics or observations over HTTP, do it in your application on top of readers/backends, not inside `Agent` itself. `examples/08-observability-http.ts` is an application-layer example, not an SDK-owned HTTP feature.
+
+Run the full example locally with `npm run example:observability-http`.
+
 ## Architecture for Scale
 
 For production deployments serving many users, we recommend the **Worker Microservice Pattern**:
@@ -150,6 +192,7 @@ See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detai
 | [Concepts](./docs/en/getting-started/concepts.md) | Core concepts explained |
 | **Guides** | |
 | [Events](./docs/en/guides/events.md) | Three-channel event system |
+| [Observability](./docs/en/guides/observability.md) | Metrics, observations, persistence, and app-layer exposure |
 | [Tools](./docs/en/guides/tools.md) | Built-in tools & custom tools |
 | [E2B Sandbox](./docs/en/guides/e2b-sandbox.md) | E2B cloud sandbox integration |
 | [OpenSandbox](./docs/en/guides/opensandbox-sandbox.md) | OpenSandbox self-hosted sandbox integration |

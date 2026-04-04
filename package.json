@@ -26,6 +26,7 @@
     "example:openrouter": "ts-node examples/05-openrouter-complete.ts",
     "example:openrouter-stream": "ts-node examples/06-openrouter-stream.ts",
     "example:openrouter-agent": "ts-node examples/07-openrouter-agent.ts",
+    "example:observability-http": "ts-node examples/08-observability-http.ts",
     "example:db-sqlite": "ts-node examples/db-sqlite.ts",
     "example:db-postgres": "ts-node examples/db-postgres.ts"
   },

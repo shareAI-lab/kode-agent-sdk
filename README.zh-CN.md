@@ -90,6 +90,48 @@ export OPEN_SANDBOX_ENDPOINT=http://127.0.0.1:8080  # 可选
 export OPEN_SANDBOX_IMAGE=ubuntu                     # 可选
 ```
 
+## 可观测性
+
+KODE 把可观测性优先作为 SDK 能力暴露：
+
+- 运行时指标：`agent.getMetricsSnapshot()`
+- 运行时 observation：`agent.getObservationReader()` / `agent.subscribeObservations()`
+- 可选 OTEL bridge：`observability.otel`
+- 可选持久化 observation 查询：`observability.persistence`
+
+最小持久化 observation 示例：
+
+```typescript
+import {
+  Agent,
+  JSONStore,
+  JSONStoreObservationBackend,
+  createStoreBackedObservationReader,
+} from '@shareai-lab/kode-sdk';
+
+const storeDir = './.kode';
+const observationBackend = new JSONStoreObservationBackend(storeDir);
+
+const agent = await Agent.create({
+  templateId: 'assistant',
+  observability: {
+    persistence: {
+      backend: observationBackend,
+    },
+  },
+}, deps);
+
+const runtimeSnapshot = agent.getMetricsSnapshot();
+const runtimeObservations = agent.getObservationReader().listObservations();
+
+const persistedReader = createStoreBackedObservationReader(observationBackend);
+const persistedObservations = await persistedReader.listObservations({ limit: 50 });
+```
+
+如果你要通过 HTTP 对外暴露这些指标或 observation，应该在你的应用层基于 reader/backend 去包装，而不是让 `Agent` 自己直接监听端口。`examples/08-observability-http.ts` 只是应用层示例，不是 SDK 自带的 HTTP 能力。
+
+可通过 `npm run example:observability-http` 本地运行完整示例。
+
 ## 支持的 Provider
 
 | Provider | 流式输出 | 工具调用 | 推理 | 文件 |
@@ -110,6 +152,7 @@ export OPEN_SANDBOX_IMAGE=ubuntu                     # 可选
 | [核心概念](./docs/zh-CN/getting-started/concepts.md) | 核心概念详解 |
 | **使用指南** | |
 | [事件系统](./docs/zh-CN/guides/events.md) | 三通道事件系统 |
+| [可观测性](./docs/zh-CN/guides/observability.md) | 指标、observation、持久化与应用层暴露 |
 | [工具系统](./docs/zh-CN/guides/tools.md) | 内置工具与自定义工具 |
 | [E2B 沙箱](./docs/zh-CN/guides/e2b-sandbox.md) | E2B 云端沙箱接入 |
 | [OpenSandbox 沙箱](./docs/zh-CN/guides/opensandbox-sandbox.md) | OpenSandbox 自托管沙箱接入 |

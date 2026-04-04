@@ -57,6 +57,8 @@ export interface ModelStreamChunk {
     input_tokens?: number;
     output_tokens: number;
   };
+  extendedUsage?: UsageStatistics;
+  stop_reason?: string;
 }
 
 /**

@@ -153,7 +153,33 @@ const stats = await store.aggregateStats(agent.agentId);
 
 ---
 
-## 6. Combined: Approval + Collaboration + Scheduling
+## 6. Observability Readers + Application HTTP Wrapper
+
+- **Goal**: Read runtime/persisted observations from the SDK and optionally expose them through your own app-layer HTTP service.
+- **Example**: `examples/08-observability-http.ts`
+- **Run**: `npm run example:observability-http`
+- **Key Steps**:
+  1. Read point-in-time metrics with `agent.getMetricsSnapshot()`.
+  2. Read live in-memory observations with `agent.getObservationReader()` or `agent.subscribeObservations()`.
+  3. Configure `observability.persistence.backend` and query history with `createStoreBackedObservationReader(...)`.
+  4. Map your own routes, auth, tenant checks, and response shaping in application code.
+- **Considerations**:
+  - Prefer runtime reader for "what is happening now" and persisted reader for audit/history views.
+  - Treat `metadata.__debug` as internal/debug-only data; do not expose it blindly to external consumers.
+  - Keep HTTP, auth, rate limiting, and dashboard concerns outside SDK core.
+
+```typescript
+const metrics = agent.getMetricsSnapshot();
+const runtimeReader = agent.getObservationReader();
+const persistedReader = createStoreBackedObservationReader(observationBackend);
+
+const runtime = runtimeReader.listObservations({ limit: 20 });
+const persisted = await persistedReader.listObservations({ agentIds: [agent.agentId], limit: 50 });
+```
+
+---
+
+## 7. Combined: Approval + Collaboration + Scheduling
 
 - **Scenario**: Code review bot, Planner splits tasks and assigns to Specialists, tool operations need approval, scheduled reminders ensure SLA.
 - **Implementation**:
@@ -184,12 +210,13 @@ const stats = await store.aggregateStats(agent.agentId);
 
 - [Getting Started](../getting-started/quickstart.md)
 - [Events Guide](../guides/events.md)
+- [Observability Guide](../guides/observability.md)
 - [Multi-Agent Systems](../advanced/multi-agent.md)
 - [Database Guide](../guides/database.md)
 
 ---
 
-## 7. CLI Agent Application
+## 8. CLI Agent Application
 
 Build command-line AI assistants like Claude Code or Cursor.
 

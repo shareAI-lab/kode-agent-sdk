@@ -13,6 +13,7 @@
     "openrouter": "ts-node 05-openrouter-complete.ts",
     "openrouter-stream": "ts-node 06-openrouter-stream.ts",
     "openrouter-agent": "ts-node 07-openrouter-agent.ts",
+    "observability-http": "ts-node 08-observability-http.ts",
     "db-sqlite": "ts-node db-sqlite.ts",
     "db-postgres": "ts-node db-postgres.ts",
     "anthropic": "ts-node anthropic-usage.ts",

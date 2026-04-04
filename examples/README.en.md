@@ -64,7 +64,44 @@ export POSTGRES_PASSWORD=your-password
 | openrouter | OpenRouter example | `npm run openrouter` |
 | openrouter-stream | OpenRouter streaming | `npm run openrouter-stream` |
 | openrouter-agent | OpenRouter Agent integration | `npm run openrouter-agent` |
+| observability-http | App-layer HTTP example wrapping KODE observability | `npm run observability-http` |
 | nextjs | Next.js API route integration | `npm run nextjs` |
+
+## Observability HTTP Example
+
+This example keeps HTTP in application code and uses SDK readers/backends underneath.
+
+```bash
+# From repo root
+npm run example:observability-http
+
+# Or from examples/
+cd examples
+npm run observability-http
+```
+
+Required env:
+
+```bash
+export KODE_EXAMPLE_PROVIDER=glm  # optional, auto-detected when OPENAI_MODEL_ID starts with glm
+export OPENAI_API_KEY=your-key
+export OPENAI_MODEL_ID=glm-5
+export OPENAI_BASE_URL=https://open.bigmodel.cn/api/paas/v4/
+```
+
+This follows the same `OPENAI_*` convention as `examples/openai-usage.ts`, so OpenAI-compatible providers such as GLM can be reused without hardcoding Anthropic-only settings.
+
+Suggested requests after startup:
+
+```bash
+curl http://127.0.0.1:3100/
+curl -X POST http://127.0.0.1:3100/agents/demo/send \
+  -H 'content-type: application/json' \
+  -d '{"prompt":"Summarize observability in one sentence."}'
+curl http://127.0.0.1:3100/api/observability/agents/agt-observability-http-demo/metrics
+curl http://127.0.0.1:3100/api/observability/agents/agt-observability-http-demo/observations/runtime
+curl http://127.0.0.1:3100/api/observability/agents/agt-observability-http-demo/observations/persisted
+```
 
 ## E2B Cloud Sandbox Example
 
@@ -105,3 +142,4 @@ examples/
 2. Some examples require network access to external APIs
 3. The db-postgres example requires a running PostgreSQL database
 4. E2B examples require an E2B account and API key
+5. The `observability-http` example shows how an application can wrap SDK observability readers with HTTP; it is not an Agent-owned HTTP server and not a core SDK feature

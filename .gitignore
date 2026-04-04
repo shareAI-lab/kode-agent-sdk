@@ -32,3 +32,4 @@ tests/.tmp/
 *.log
 *.txt
 .kode/
+.kode-observability-http/
