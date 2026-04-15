@@ -60,6 +60,7 @@ export class SqliteStore implements ExtendedStore {
   // ========== 数据库初始化 ==========
 
   private initialize(): void {
+    this.db.pragma('foreign_keys = ON');
     this.createTables();
     this.createIndexes();
   }
@@ -365,10 +366,16 @@ export class SqliteStore implements ExtendedStore {
 
   async saveSnapshot(agentId: string, snapshot: Snapshot): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO snapshots (
+      INSERT INTO snapshots (
         agent_id, snapshot_id, messages, last_sfp_index,
         last_bookmark, created_at, metadata
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(agent_id, snapshot_id) DO UPDATE SET
+        messages = excluded.messages,
+        last_sfp_index = excluded.last_sfp_index,
+        last_bookmark = excluded.last_bookmark,
+        created_at = excluded.created_at,
+        metadata = excluded.metadata
     `);
 
     stmt.run(
@@ -441,11 +448,21 @@ export class SqliteStore implements ExtendedStore {
 
   async saveInfo(agentId: string, info: AgentInfo): Promise<void> {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO agents (
+      INSERT INTO agents (
         agent_id, template_id, created_at, config_version,
         lineage, message_count, last_sfp_index, last_bookmark,
         breakpoint, metadata
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(agent_id) DO UPDATE SET
+        template_id = excluded.template_id,
+        created_at = excluded.created_at,
+        config_version = excluded.config_version,
+        lineage = excluded.lineage,
+        message_count = excluded.message_count,
+        last_sfp_index = excluded.last_sfp_index,
+        last_bookmark = excluded.last_bookmark,
+        breakpoint = excluded.breakpoint,
+        metadata = excluded.metadata
     `);
 
     stmt.run(

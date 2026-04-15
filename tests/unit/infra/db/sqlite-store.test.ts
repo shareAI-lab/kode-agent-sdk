@@ -478,6 +478,85 @@ runner.test('aggregateStats - 统计准确性', async () => {
   expect.toEqual(stats.toolCallsByName!['fs_read'], 1);
 });
 
+// ========== 5.1.6b 回归测试 - saveInfo 不应级联删除子表数据 (Issue #49) ==========
+
+runner.test('saveInfo - 更新不应删除 messages 和 tool_calls (Issue #49)', async () => {
+  const agentId = 'agt-issue49';
+
+  // 1. 创建 Agent
+  await store.saveInfo(agentId, {
+    agentId,
+    templateId: 'test-template',
+    createdAt: new Date().toISOString(),
+    configVersion: 'v2.7.0',
+    lineage: [],
+    messageCount: 0,
+    lastSfpIndex: -1,
+    metadata: {}
+  });
+
+  // 2. 保存 messages
+  await store.saveMessages(agentId, [
+    { role: 'user', content: [{ type: 'text', text: 'Hello' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Hi!' }] }
+  ]);
+
+  // 3. 保存 tool_calls
+  await store.saveToolCallRecords(agentId, [
+    {
+      id: 'call_issue49',
+      name: 'fs_read',
+      input: { path: '/test.txt' },
+      state: 'COMPLETED' as any,
+      approval: { required: false },
+      result: { content: 'ok' },
+      isError: false,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      auditTrail: []
+    }
+  ]);
+
+  // 4. 保存 snapshot
+  await store.saveSnapshot(agentId, {
+    id: 'snap:issue49',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'snap' }] }],
+    lastSfpIndex: 0,
+    lastBookmark: { seq: 1, timestamp: Date.now() },
+    createdAt: new Date().toISOString()
+  });
+
+  // 5. 再次调用 saveInfo 更新 agent 元数据（这是触发 bug 的操作）
+  await store.saveInfo(agentId, {
+    agentId,
+    templateId: 'test-template',
+    createdAt: new Date().toISOString(),
+    configVersion: 'v2.7.1',  // 版本更新
+    lineage: [],
+    messageCount: 2,
+    lastSfpIndex: 0,
+    metadata: { updated: true }
+  });
+
+  // 6. 验证子表数据未被删除
+  const messages = await store.loadMessages(agentId);
+  expect.toHaveLength(messages, 2);
+  expect.toEqual((messages[0].content[0] as any).text, 'Hello');
+
+  const toolCalls = await store.loadToolCallRecords(agentId);
+  expect.toHaveLength(toolCalls, 1);
+  expect.toEqual(toolCalls[0].id, 'call_issue49');
+
+  const snapshots = await store.listSnapshots(agentId);
+  expect.toHaveLength(snapshots, 1);
+  expect.toEqual(snapshots[0].id, 'snap:issue49');
+
+  // 7. 验证 agent info 确实已更新
+  const info = await store.loadInfo(agentId);
+  expect.toEqual(info!.configVersion, 'v2.7.1');
+  expect.toDeepEqual(info!.metadata, { updated: true });
+});
+
 // ========== 5.1.7 测试事务一致性 ==========
 
 runner.test('saveMessages - 事务回滚测试', async () => {
