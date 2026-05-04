@@ -32,7 +32,6 @@ KODE SDK provides a complete Skills system supporting modular, reusable capabili
 .skills/
 ├── skill-name/              # Skill directory
 │   ├── SKILL.md            # Skill definition (required)
-│   ├── metadata.json       # Skill metadata (optional)
 │   ├── references/         # Reference documents
 │   ├── scripts/            # Executable scripts
 │   └── assets/             # Static resources
@@ -42,10 +41,13 @@ KODE SDK provides a complete Skills system supporting modular, reusable capabili
 
 ### SKILL.md Format
 
+SKILL.md uses YAML frontmatter format for metadata, followed by Markdown content:
+
 ```markdown
-<!-- skill: skill-name -->
-<!-- version: 1.0.0 -->
-<!-- author: Your Name -->
+---
+name: skill-name
+description: Skill description
+---
 
 # Skill Name
 
@@ -61,17 +63,14 @@ Brief description of the skill's functionality.
 Detailed instructions for using this skill...
 ```
 
-### metadata.json Format
+**Field Reference:**
 
-```json
-{
-  "name": "skill-name",
-  "description": "Skill description",
-  "version": "1.0.0",
-  "author": "Author",
-  "baseDir": "/path/to/skill"
-}
-```
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Skill identifier, must match the directory name |
+| `description` | Yes | Skill description, used for system prompt injection |
+
+> **Note**: Agent runtime uses the folder name as the skill identifier; management operations require the `name` field in YAML frontmatter.
 
 ---
 

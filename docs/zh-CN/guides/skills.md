@@ -32,7 +32,6 @@ KODE SDK 提供完整的 Skills 系统，支持模块化、可重用的能力单
 .skills/
 ├── skill-name/              # 技能目录
 │   ├── SKILL.md            # 技能定义（必需）
-│   ├── metadata.json       # 技能元数据（可选）
 │   ├── references/         # 参考资料
 │   ├── scripts/            # 可执行脚本
 │   └── assets/             # 静态资源
@@ -42,10 +41,13 @@ KODE SDK 提供完整的 Skills 系统，支持模块化、可重用的能力单
 
 ### SKILL.md 格式
 
+SKILL.md 使用 YAML frontmatter 格式声明元数据， 跟着 Markdown 正文：
+
 ```markdown
-<!-- skill: skill-name -->
-<!-- version: 1.0.0 -->
-<!-- author: Your Name -->
+---
+name: skill-name
+description: 技能描述
+---
 
 # 技能名称
 
@@ -61,17 +63,12 @@ KODE SDK 提供完整的 Skills 系统，支持模块化、可重用的能力单
 使用此技能的详细说明...
 ```
 
-### metadata.json 格式
+**字段说明：**
 
-```json
-{
-  "name": "skill-name",
-  "description": "技能描述",
-  "version": "1.0.0",
-  "author": "作者",
-  "baseDir": "/path/to/skill"
-}
-```
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `name` | 是 | 技能标识符，必须与目录名一致 |
+| `description` | 是 | 技能描述，用于系统提示词注入 |
 
 ---
 
