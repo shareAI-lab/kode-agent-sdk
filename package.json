@@ -1,6 +1,6 @@
 {
   "name": "@shareai-lab/kode-sdk",
-  "version": "2.7.4",
+  "version": "2.7.5",
   "description": "Event-driven, long-running AI Agent development framework with enterprise-grade persistence and context management",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
