@@ -324,9 +324,24 @@ export class GeminiProvider implements ModelProvider {
         const parsed = JSON.parse(buffer.trim());
         const events = Array.isArray(parsed) ? parsed : [parsed];
         for (const event of events) {
-          const { textChunks, functionCalls, usage } = this.parseGeminiChunk(event);
+          const { textChunks, thoughtChunks, functionCalls, usage } = this.parseGeminiChunk(event);
           if (usage) {
             lastUsage = usage;
+          }
+          for (const text of thoughtChunks) {
+            if (!thinkStarted) {
+              thinkStarted = true;
+              yield {
+                type: 'content_block_start',
+                index: thinkIndex,
+                content_block: { type: 'reasoning', reasoning: '' },
+              };
+            }
+            yield {
+              type: 'content_block_delta',
+              index: thinkIndex,
+              delta: { type: 'reasoning_delta', text },
+            };
           }
           for (const text of textChunks) {
             if (!textStarted) {
@@ -632,7 +647,7 @@ export class GeminiProvider implements ModelProvider {
     for (const candidate of candidates) {
       const parts = candidate?.content?.parts ?? [];
       for (const part of parts) {
-        if (typeof part?.text === 'string') {
+        if (typeof part?.text === 'string' && part.text.length > 0) {
           if (part.thought === true && this.reasoningTransport === 'provider') {
             thoughtChunks.push(part.text);
           } else {
