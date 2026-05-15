@@ -231,8 +231,10 @@ export class GeminiProvider implements ModelProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let textStarted = false;
-    const textIndex = 0;
-    let toolIndex = 1;
+    let thinkStarted = false;
+    const thinkIndex = 0;
+    const textIndex = 1;
+    let toolIndex = 2;
     const toolCalls: Array<{ name: string; args: any; thoughtSignature?: string }> = [];
     let lastUsage: { input: number; output: number } | undefined;
     let collectAll = false;
@@ -274,9 +276,25 @@ export class GeminiProvider implements ModelProvider {
           break;
         }
 
-        const { textChunks, functionCalls, usage } = this.parseGeminiChunk(event);
+        const { textChunks, thoughtChunks, functionCalls, usage } = this.parseGeminiChunk(event);
         if (usage) {
           lastUsage = usage;
+        }
+
+        for (const text of thoughtChunks) {
+          if (!thinkStarted) {
+            thinkStarted = true;
+            yield {
+              type: 'content_block_start',
+              index: thinkIndex,
+              content_block: { type: 'reasoning', reasoning: '' },
+            };
+          }
+          yield {
+            type: 'content_block_delta',
+            index: thinkIndex,
+            delta: { type: 'reasoning_delta', text },
+          };
         }
 
         for (const text of textChunks) {
@@ -602,10 +620,12 @@ export class GeminiProvider implements ModelProvider {
 
   private parseGeminiChunk(event: any): {
     textChunks: string[];
+    thoughtChunks: string[];
     functionCalls: Array<{ name: string; args: any; thoughtSignature?: string }>;
     usage?: { input: number; output: number };
   } {
     const textChunks: string[] = [];
+    const thoughtChunks: string[] = [];
     const functionCalls: Array<{ name: string; args: any; thoughtSignature?: string }> = [];
 
     const candidates = Array.isArray(event?.candidates) ? event.candidates : [];
@@ -613,7 +633,11 @@ export class GeminiProvider implements ModelProvider {
       const parts = candidate?.content?.parts ?? [];
       for (const part of parts) {
         if (typeof part?.text === 'string') {
-          textChunks.push(part.text);
+          if (part.thought === true && this.reasoningTransport === 'provider') {
+            thoughtChunks.push(part.text);
+          } else {
+            textChunks.push(part.text);
+          }
         } else if (part?.functionCall) {
           const thoughtSignature = part?.thoughtSignature ?? part?.functionCall?.thoughtSignature;
           functionCalls.push({
@@ -633,6 +657,6 @@ export class GeminiProvider implements ModelProvider {
         }
       : undefined;
 
-    return { textChunks, functionCalls, usage };
+    return { textChunks, thoughtChunks, functionCalls, usage };
   }
 }
