@@ -412,9 +412,15 @@ export class GeminiProvider implements ModelProvider {
     if (opts.maxTokens !== undefined) generationConfig.maxOutputTokens = opts.maxTokens;
 
     if (opts.thinking?.budgetTokens) {
-      generationConfig.thinkingConfig = { thinkingBudget: opts.thinking.budgetTokens };
+      generationConfig.thinkingConfig = {
+        thinkingBudget: opts.thinking.budgetTokens,
+        includeThoughts: true,
+      };
     } else if (opts.thinking?.level) {
-      generationConfig.thinkingConfig = { thinkingLevel: opts.thinking.level.toUpperCase() };
+      generationConfig.thinkingConfig = {
+        thinkingLevel: opts.thinking.level.toUpperCase(),
+        includeThoughts: true,
+      };
     }
 
     const body: any = {
