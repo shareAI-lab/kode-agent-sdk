@@ -574,7 +574,11 @@ export class GeminiProvider implements ModelProvider {
     const parts = content?.parts ?? [];
     for (const part of parts) {
       if (typeof part?.text === 'string') {
-        blocks.push({ type: 'text', text: part.text });
+        if (part.thought === true && this.reasoningTransport === 'provider') {
+          blocks.push({ type: 'reasoning', reasoning: part.text });
+        } else {
+          blocks.push({ type: 'text', text: part.text });
+        }
       } else if (part?.functionCall) {
         const call = part.functionCall;
         const thoughtSignature = part?.thoughtSignature ?? call?.thoughtSignature;
