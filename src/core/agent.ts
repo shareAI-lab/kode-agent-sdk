@@ -1280,7 +1280,7 @@ export class Agent {
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
-        recommendations: ['确认工具是否已注册', '检查模板或配置中的工具列表'],
+        recommendations: ['Check if the tool is registered', 'Check the tool list in template or config'],
       });
     }
 
@@ -1291,7 +1291,7 @@ export class Agent {
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
-        recommendations: ['检查工具入参是否符合 schema', '根据提示修正参数后重试'],
+        recommendations: ['Check if tool input matches the schema', 'Fix parameters based on the error and retry'],
       });
     }
 
@@ -1326,7 +1326,7 @@ export class Agent {
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
-        recommendations: ['检查模板或权限配置的 allow/deny 列表', '如需执行该工具，请调整权限模式或审批策略'],
+        recommendations: ['Check the allow/deny list in template or permissions config', 'Adjust permission mode or approval policy to allow this tool'],
       });
     }
 
@@ -1362,7 +1362,7 @@ export class Agent {
           return this.makeToolResult(toolUse.id, {
             ok: false,
             error: decision.toolResult || message,
-            recommendations: ['根据 Hook 给出的原因调整输入或策略'],
+            recommendations: ['Adjust input or strategy based on the hook rejection reason'],
           });
         }
       } else if ('result' in decision) {
@@ -1519,7 +1519,7 @@ export class Agent {
       });
 
       const recommendations = isAbort
-        ? ['检查是否手动中断', '根据需要重新触发工具', '考虑调整超时时间']
+        ? ['Check if manually interrupted', 'Re-trigger the tool if needed', 'Consider adjusting the timeout']
         : this.getErrorRecommendations('runtime', toolUse.name);
 
       return this.makeToolResult(toolUse.id, {
@@ -2089,13 +2089,13 @@ export class Agent {
     const baseMessage = (() => {
       switch (state) {
         case 'APPROVAL_REQUIRED':
-          return '工具在等待审批时会话中断，系统已自动封口。';
+          return 'Tool interrupted while awaiting approval; session sealed automatically.';
         case 'APPROVED':
-          return '工具已通过审批但尚未执行，系统已自动封口。';
+          return 'Tool approved but not yet executed; session sealed automatically.';
         case 'EXECUTING':
-          return '工具执行过程中会话中断，系统已自动封口。';
+          return 'Tool interrupted during execution; session sealed automatically.';
         case 'PENDING':
-          return '工具刚准备执行时会话中断，系统已自动封口。';
+          return 'Tool interrupted just before execution; session sealed automatically.';
         default:
           return fallbackNote;
       }
@@ -2104,15 +2104,15 @@ export class Agent {
     const recommendations: string[] = (() => {
       switch (state) {
         case 'APPROVAL_REQUIRED':
-          return ['确认审批是否仍然需要', '如需继续，请重新触发工具并完成审批'];
+          return ['Confirm if approval is still required', 'Re-trigger the tool and complete approval to continue'];
         case 'APPROVED':
-          return ['确认工具输入是否仍然有效', '如需执行，请重新触发工具'];
+          return ['Confirm the tool input is still valid', 'Re-trigger the tool to execute'];
         case 'EXECUTING':
-          return ['检查工具可能产生的副作用', '确认外部系统状态后再重试'];
+          return ['Check for possible side effects of the tool', 'Confirm external system state before retrying'];
         case 'PENDING':
-          return ['确认工具参数是否正确', '再次触发工具以继续流程'];
+          return ['Confirm tool parameters are correct', 'Re-trigger the tool to continue'];
         default:
-          return ['检查封口说明并决定是否重试工具'];
+          return ['Check the seal description and decide whether to retry the tool'];
       }
     })();
 
@@ -2293,46 +2293,46 @@ export class Agent {
     switch (errorType) {
       case 'validation':
         return [
-          '检查工具参数是否符合schema要求',
-          '确认所有必填参数已提供',
-          '检查参数类型是否正确',
-          '参考工具手册中的参数说明'
+          'Check tool parameters match the schema',
+          'Confirm all required parameters are provided',
+          'Check parameter types are correct',
+          'Refer to the tool manual for parameter details'
         ];
       case 'runtime':
         return [
-          '检查系统资源是否可用',
-          '确认文件/路径是否存在且有权限',
-          '考虑添加错误处理逻辑',
-          '可以重试该操作'
+          'Check system resources are available',
+          'Confirm the file/path exists and is accessible',
+          'Consider adding error handling logic',
+          'The operation can be retried'
         ];
       case 'logical':
         if (toolName.startsWith('fs_')) {
           return [
-            '确认文件内容是否符合预期',
-            '检查文件是否被外部修改',
-            '验证路径和模式是否正确',
-            '可以先用 fs_read 确认文件状态'
+            'Confirm file content matches expectations',
+            'Check if the file was modified externally',
+            'Verify the path and pattern are correct',
+            'Use fs_read to confirm current file state'
           ];
         } else if (toolName.startsWith('bash_')) {
           return [
-            '检查命令语法是否正确',
-            '确认命令在沙箱环境中可执行',
-            '查看stderr输出了解详细错误',
-            '考虑调整超时时间或拆分命令'
+            'Check command syntax is correct',
+            'Confirm the command can run in the sandbox environment',
+            'Check stderr output for detailed error information',
+            'Consider adjusting timeout or splitting the command'
           ];
         } else {
           return [
-            '检查工具逻辑是否符合预期',
-            '验证输入数据的完整性',
-            '考虑重试或使用替代方案',
-            '查看错误详情调整策略'
+            'Check if the tool logic matches expectations',
+            'Verify the completeness of input data',
+            'Consider retrying or using an alternative approach',
+            'Review error details and adjust strategy'
           ];
         }
       default:
         return [
-          '查看错误信息调整输入',
-          '考虑使用替代工具',
-          '必要时寻求人工协助'
+          'Review the error message and adjust input',
+          'Consider using an alternative tool',
+          'Seek human assistance if necessary'
         ];
     }
   }
@@ -2452,7 +2452,7 @@ export class Agent {
   private handleExternalFileChange(path: string, mtime: number) {
     const relPath = this.relativePath(path);
     this.events.emitMonitor({ channel: 'monitor', type: 'file_changed', path: relPath, mtime });
-    const reminder = `检测到外部修改：${relPath}。请重新使用 fs_read 确认文件内容，并在必要时向用户同步。`;
+    const reminder = `External file change detected: ${relPath}. Use fs_read to re-read the file and sync with the user if needed.`;
     this.remind(reminder, { category: 'file', priority: 'medium' });
   }
 
