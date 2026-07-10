@@ -231,8 +231,10 @@ export class GeminiProvider implements ModelProvider {
     const decoder = new TextDecoder();
     let buffer = '';
     let textStarted = false;
-    const textIndex = 0;
-    let toolIndex = 1;
+    let thinkStarted = false;
+    const thinkIndex = 0;
+    const textIndex = 1;
+    let toolIndex = 2;
     const toolCalls: Array<{ name: string; args: any; thoughtSignature?: string }> = [];
     let lastUsage: { input: number; output: number } | undefined;
     let collectAll = false;
@@ -274,9 +276,25 @@ export class GeminiProvider implements ModelProvider {
           break;
         }
 
-        const { textChunks, functionCalls, usage } = this.parseGeminiChunk(event);
+        const { textChunks, thoughtChunks, functionCalls, usage } = this.parseGeminiChunk(event);
         if (usage) {
           lastUsage = usage;
+        }
+
+        for (const text of thoughtChunks) {
+          if (!thinkStarted) {
+            thinkStarted = true;
+            yield {
+              type: 'content_block_start',
+              index: thinkIndex,
+              content_block: { type: 'reasoning', reasoning: '' },
+            };
+          }
+          yield {
+            type: 'content_block_delta',
+            index: thinkIndex,
+            delta: { type: 'reasoning_delta', text },
+          };
         }
 
         for (const text of textChunks) {
@@ -306,9 +324,24 @@ export class GeminiProvider implements ModelProvider {
         const parsed = JSON.parse(buffer.trim());
         const events = Array.isArray(parsed) ? parsed : [parsed];
         for (const event of events) {
-          const { textChunks, functionCalls, usage } = this.parseGeminiChunk(event);
+          const { textChunks, thoughtChunks, functionCalls, usage } = this.parseGeminiChunk(event);
           if (usage) {
             lastUsage = usage;
+          }
+          for (const text of thoughtChunks) {
+            if (!thinkStarted) {
+              thinkStarted = true;
+              yield {
+                type: 'content_block_start',
+                index: thinkIndex,
+                content_block: { type: 'reasoning', reasoning: '' },
+              };
+            }
+            yield {
+              type: 'content_block_delta',
+              index: thinkIndex,
+              delta: { type: 'reasoning_delta', text },
+            };
           }
           for (const text of textChunks) {
             if (!textStarted) {
@@ -412,9 +445,15 @@ export class GeminiProvider implements ModelProvider {
     if (opts.maxTokens !== undefined) generationConfig.maxOutputTokens = opts.maxTokens;
 
     if (opts.thinking?.budgetTokens) {
-      generationConfig.thinkingConfig = { thinkingBudget: opts.thinking.budgetTokens };
+      generationConfig.thinkingConfig = {
+        thinkingBudget: opts.thinking.budgetTokens,
+        includeThoughts: true,
+      };
     } else if (opts.thinking?.level) {
-      generationConfig.thinkingConfig = { thinkingLevel: opts.thinking.level.toUpperCase() };
+      generationConfig.thinkingConfig = {
+        thinkingLevel: opts.thinking.level.toUpperCase(),
+        includeThoughts: true,
+      };
     }
 
     const body: any = {
@@ -574,7 +613,11 @@ export class GeminiProvider implements ModelProvider {
     const parts = content?.parts ?? [];
     for (const part of parts) {
       if (typeof part?.text === 'string') {
-        blocks.push({ type: 'text', text: part.text });
+        if (part.thought === true && this.reasoningTransport === 'provider') {
+          blocks.push({ type: 'reasoning', reasoning: part.text });
+        } else {
+          blocks.push({ type: 'text', text: part.text });
+        }
       } else if (part?.functionCall) {
         const call = part.functionCall;
         const thoughtSignature = part?.thoughtSignature ?? call?.thoughtSignature;
@@ -592,18 +635,24 @@ export class GeminiProvider implements ModelProvider {
 
   private parseGeminiChunk(event: any): {
     textChunks: string[];
+    thoughtChunks: string[];
     functionCalls: Array<{ name: string; args: any; thoughtSignature?: string }>;
     usage?: { input: number; output: number };
   } {
     const textChunks: string[] = [];
+    const thoughtChunks: string[] = [];
     const functionCalls: Array<{ name: string; args: any; thoughtSignature?: string }> = [];
 
     const candidates = Array.isArray(event?.candidates) ? event.candidates : [];
     for (const candidate of candidates) {
       const parts = candidate?.content?.parts ?? [];
       for (const part of parts) {
-        if (typeof part?.text === 'string') {
-          textChunks.push(part.text);
+        if (typeof part?.text === 'string' && part.text.length > 0) {
+          if (part.thought === true && this.reasoningTransport === 'provider') {
+            thoughtChunks.push(part.text);
+          } else {
+            textChunks.push(part.text);
+          }
         } else if (part?.functionCall) {
           const thoughtSignature = part?.thoughtSignature ?? part?.functionCall?.thoughtSignature;
           functionCalls.push({
@@ -623,6 +672,6 @@ export class GeminiProvider implements ModelProvider {
         }
       : undefined;
 
-    return { textChunks, functionCalls, usage };
+    return { textChunks, thoughtChunks, functionCalls, usage };
   }
 }
