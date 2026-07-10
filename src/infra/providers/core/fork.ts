@@ -426,7 +426,7 @@ export const geminiResumeHandler: ResumeHandler = {
       const processedBlocks = msg.content.map(block => {
         if (block.type === 'reasoning') {
           // Keep if has signature, otherwise omit
-          if (block.meta?.thoughtSignature) {
+          if (block.meta?.thought_signature || block.meta?.thoughtSignature) {
             return block;
           }
           return null;
