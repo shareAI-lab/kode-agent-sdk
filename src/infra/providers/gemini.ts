@@ -50,8 +50,9 @@ export interface GeminiProviderOptions {
   thinking?: ThinkingOptions;
 }
 
-type GeminiStreamPart =
-  | { type: 'text' | 'reasoning'; text: string; thoughtSignature?: string }
+type GeminiDecodedPart =
+  | { type: 'text'; text: string; thoughtSignature?: string }
+  | { type: 'reasoning'; text: string; thoughtSignature?: string }
   | { type: 'tool_use'; id?: string; name: string; args: any; thoughtSignature?: string };
 
 export class GeminiProvider implements ModelProvider {
@@ -239,7 +240,7 @@ export class GeminiProvider implements ModelProvider {
       activeBlock = undefined;
     }
 
-    function* emitPart(part: GeminiStreamPart): Generator<ModelStreamChunk> {
+    function* emitPart(part: GeminiDecodedPart): Generator<ModelStreamChunk> {
       if (part.type === 'tool_use') {
         yield* closeActiveBlock();
         const index = nextBlockIndex++;
@@ -319,14 +320,22 @@ export class GeminiProvider implements ModelProvider {
       };
     }
 
-    for await (const event of this.iterateGeminiStreamEvents(response)) {
-      const { parts, usage } = this.parseGeminiChunk(event);
-      if (usage) {
-        lastUsage = usage;
+    try {
+      for await (const payload of this.iterateGeminiStreamEvents(response)) {
+        const events = Array.isArray(payload) ? payload : [payload];
+        for (const event of events) {
+          const { parts, usage } = this.parseGeminiChunk(event);
+          if (usage) {
+            lastUsage = usage;
+          }
+          for (const part of parts) {
+            yield* emitPart(part);
+          }
+        }
       }
-      for (const part of parts) {
-        yield* emitPart(part);
-      }
+    } catch (error) {
+      yield* closeActiveBlock();
+      throw error;
     }
 
     yield* closeActiveBlock();
@@ -369,27 +378,24 @@ export class GeminiProvider implements ModelProvider {
   }
 
   private async *iterateGeminiStreamEvents(response: Response): AsyncGenerator<any> {
-    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
-    if (!contentType.includes('text/event-stream')) {
-      const payload = (await response.text()).trim();
-      if (!payload) return;
+    const parseJsonPayload = (payload: string, context: string): any[] => {
+      const trimmed = payload.trim();
+      if (!trimmed) return [];
       let parsed: any;
       try {
-        parsed = JSON.parse(payload);
+        parsed = JSON.parse(trimmed);
       } catch (error: any) {
-        throw new Error(`Gemini stream parse error in JSON response: ${error?.message ?? 'invalid JSON'}`);
+        throw new Error(`Gemini stream parse error in ${context}: ${error?.message ?? 'invalid JSON'}`);
       }
-      for (const event of Array.isArray(parsed) ? parsed : [parsed]) {
-        yield event;
-      }
-      return;
-    }
+      return Array.isArray(parsed) ? parsed : [parsed];
+    };
 
     const reader = response.body?.getReader();
     if (!reader) throw new Error('No response body');
 
     const decoder = new TextDecoder();
     const doneMarker = Symbol('done');
+    let wireMode: 'unknown' | 'sse' | 'json' = 'unknown';
     let buffer = '';
     let dataLines: string[] = [];
     let frameIndex = 0;
@@ -422,30 +428,73 @@ export class GeminiProvider implements ModelProvider {
       return undefined;
     };
 
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
 
-      let newlineIndex: number;
-      while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
-        const line = buffer.slice(0, newlineIndex);
-        buffer = buffer.slice(newlineIndex + 1);
-        const event = consumeLine(line);
+        if (wireMode === 'unknown') {
+          const start = buffer.trimStart();
+          if (start.startsWith('[') || start.startsWith('{')) {
+            wireMode = 'json';
+          } else {
+            const firstLine = start.split(/\r?\n/, 1)[0];
+            if (
+              firstLine.startsWith('data:') ||
+              firstLine.startsWith('event:') ||
+              firstLine.startsWith('id:') ||
+              firstLine.startsWith('retry:') ||
+              firstLine.startsWith(':')
+            ) {
+              wireMode = 'sse';
+            }
+          }
+        }
+
+        if (wireMode === 'json') {
+          if (!done) continue;
+          for (const event of parseJsonPayload(buffer, 'JSON-array fallback')) {
+            yield event;
+          }
+          return;
+        }
+
+        if (wireMode === 'unknown') {
+          if (done && buffer.trim().length > 0) {
+            throw new Error('Gemini stream parse error: unrecognized response framing');
+          }
+          if (done) return;
+          continue;
+        }
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+          const line = buffer.slice(0, newlineIndex);
+          buffer = buffer.slice(newlineIndex + 1);
+          const event = consumeLine(line);
+          if (event === doneMarker) return;
+          if (event !== undefined) yield event;
+        }
+
+        if (done) break;
+      }
+
+      if (buffer.length > 0) {
+        const event = consumeLine(buffer);
         if (event === doneMarker) return;
         if (event !== undefined) yield event;
       }
-
-      if (done) break;
-    }
-
-    if (buffer.length > 0) {
-      const event = consumeLine(buffer);
-      if (event === doneMarker) return;
-      if (event !== undefined) yield event;
-    }
-    const finalEvent = dispatchFrame();
-    if (finalEvent !== undefined && finalEvent !== doneMarker) {
-      yield finalEvent;
+      const finalEvent = dispatchFrame();
+      if (finalEvent !== undefined && finalEvent !== doneMarker) {
+        yield finalEvent;
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // The stream may already be closed or errored.
+      }
+      reader.releaseLock();
     }
   }
 
@@ -549,6 +598,8 @@ export class GeminiProvider implements ModelProvider {
           }
         } else if (block.type === 'reasoning') {
           if (reasoningTransport === 'text') {
+            // A thought signature is valid only on the exact native Part. Text transport
+            // intentionally rewrites that Part for cross-provider compatibility.
             const text = `<think>${block.reasoning}</think>`;
             parts.push({ text });
           } else if (reasoningTransport === 'provider') {
@@ -653,31 +704,27 @@ export class GeminiProvider implements ModelProvider {
 
   private extractGeminiContentBlocks(content: any): ContentBlock[] {
     const blocks: ContentBlock[] = [];
-    const parts = content?.parts ?? [];
-    for (const part of parts) {
-      if (typeof part?.text === 'string') {
-        const meta =
-          typeof part.thoughtSignature === 'string' && part.thoughtSignature.length > 0
-            ? { thought_signature: part.thoughtSignature }
-            : undefined;
-        if (part.thought === true) {
-          blocks.push({ type: 'reasoning', reasoning: part.text, ...(meta ? { meta } : {}) });
-        } else {
-          blocks.push({ type: 'text', text: part.text, ...(meta ? { meta } : {}) });
-        }
-      } else if (part?.functionCall) {
-        const call = part.functionCall;
-        const thoughtSignature = part?.thoughtSignature ?? call?.thoughtSignature;
-        const hasProviderId = typeof call.id === 'string' && call.id.length > 0;
+    for (const part of this.decodeGeminiParts(content)) {
+      if (part.type === 'text' || part.type === 'reasoning') {
+        const meta = part.thoughtSignature
+          ? { thought_signature: part.thoughtSignature }
+          : undefined;
+        blocks.push(
+          part.type === 'reasoning'
+            ? { type: 'reasoning', reasoning: part.text, ...(meta ? { meta } : {}) }
+            : { type: 'text', text: part.text, ...(meta ? { meta } : {}) }
+        );
+      } else {
+        const hasProviderId = part.id !== undefined;
         const meta = {
-          ...(thoughtSignature ? { thought_signature: thoughtSignature } : {}),
+          ...(part.thoughtSignature ? { thought_signature: part.thoughtSignature } : {}),
           ...(!hasProviderId ? { gemini_function_call_id_present: false } : {}),
         };
         blocks.push({
           type: 'tool_use',
-          id: hasProviderId ? call.id : `toolcall-${Date.now()}-${blocks.length}`,
-          name: call.name ?? 'tool',
-          input: call.args ?? {},
+          id: part.id ?? `toolcall-${Date.now()}-${blocks.length}`,
+          name: part.name,
+          input: part.args,
           ...(Object.keys(meta).length > 0 ? { meta } : {}),
         });
       }
@@ -686,37 +733,14 @@ export class GeminiProvider implements ModelProvider {
   }
 
   private parseGeminiChunk(event: any): {
-    parts: GeminiStreamPart[];
+    parts: GeminiDecodedPart[];
     usage?: { input: number; output: number };
   } {
-    const parsedParts: GeminiStreamPart[] = [];
+    const parsedParts: GeminiDecodedPart[] = [];
 
     const candidates = Array.isArray(event?.candidates) ? event.candidates : [];
-    const parts = candidates[0]?.content?.parts ?? [];
-    for (const part of parts) {
-      if (typeof part?.text === 'string') {
-        const thoughtSignature =
-          typeof part.thoughtSignature === 'string' && part.thoughtSignature.length > 0
-            ? part.thoughtSignature
-            : undefined;
-        if (part.text.length === 0 && !thoughtSignature) continue;
-        parsedParts.push({
-          type: part.thought === true ? 'reasoning' : 'text',
-          text: part.text,
-          ...(thoughtSignature ? { thoughtSignature } : {}),
-        });
-      } else if (part?.functionCall) {
-        const thoughtSignature = part?.thoughtSignature ?? part?.functionCall?.thoughtSignature;
-        parsedParts.push({
-          type: 'tool_use',
-          ...(typeof part.functionCall.id === 'string' && part.functionCall.id.length > 0
-            ? { id: part.functionCall.id }
-            : {}),
-          name: part.functionCall.name ?? 'tool',
-          args: part.functionCall.args ?? {},
-          ...(thoughtSignature ? { thoughtSignature } : {}),
-        });
-      }
+    for (const candidate of candidates) {
+      parsedParts.push(...this.decodeGeminiParts(candidate?.content));
     }
 
     const usageMetadata = event?.usageMetadata;
@@ -728,5 +752,36 @@ export class GeminiProvider implements ModelProvider {
       : undefined;
 
     return { parts: parsedParts, usage };
+  }
+
+  private decodeGeminiParts(content: any): GeminiDecodedPart[] {
+    const decoded: GeminiDecodedPart[] = [];
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    for (const part of parts) {
+      if (typeof part?.text === 'string') {
+        const thoughtSignature =
+          typeof part.thoughtSignature === 'string' && part.thoughtSignature.length > 0
+            ? part.thoughtSignature
+            : undefined;
+        if (part.text.length === 0 && !thoughtSignature) continue;
+        decoded.push({
+          type: part.thought === true ? 'reasoning' : 'text',
+          text: part.text,
+          ...(thoughtSignature ? { thoughtSignature } : {}),
+        });
+      } else if (part?.functionCall) {
+        const thoughtSignature = part.thoughtSignature ?? part.functionCall.thoughtSignature;
+        decoded.push({
+          type: 'tool_use',
+          ...(typeof part.functionCall.id === 'string' && part.functionCall.id.length > 0
+            ? { id: part.functionCall.id }
+            : {}),
+          name: part.functionCall.name ?? 'tool',
+          args: part.functionCall.args ?? {},
+          ...(thoughtSignature ? { thoughtSignature } : {}),
+        });
+      }
+    }
+    return decoded;
   }
 }

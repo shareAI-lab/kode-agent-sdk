@@ -276,111 +276,113 @@ runner
 
     const workDir = path.join(TEST_ROOT, `agent-signed-work-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
     const storeDir = path.join(TEST_ROOT, `agent-signed-store-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-    ensureCleanDir(workDir);
-    ensureCleanDir(storeDir);
-
-    const templates = new AgentTemplateRegistry();
-    templates.register({
-      id: 'signed-stream-template',
-      systemPrompt: 'test signed stream metadata',
-      tools: [],
-      permission: { mode: 'auto' },
-    });
-    const store = new JSONStore(storeDir);
-    const agent = await Agent.create(
-      {
-        templateId: 'signed-stream-template',
-        model: new SignedStreamProvider(),
-        exposeThinking: true,
-        retainThinking: true,
-        sandbox: { kind: 'local', workDir, enforceBoundary: true, watchFiles: false },
-      },
-      {
-        store,
-        templateRegistry: templates,
-        sandboxFactory: new SandboxFactory(),
-        toolRegistry: new ToolRegistry(),
-      }
-    );
-
-    const retainedResult = await agent.chat('preserve signed parts');
-    expect.toEqual(retainedResult.text, 'ANSWER');
-    const messages = await store.loadMessages(agent.agentId);
-    const assistant = messages.find((message) => message.role === 'assistant');
-    expect.toDeepEqual(assistant?.content, [
-      {
-        type: 'reasoning',
-        reasoning: 'PLAN',
-        meta: { thought_signature: 'signature-thought' },
-      },
-      {
-        type: 'text',
-        text: 'ANSWER',
-        meta: { thought_signature: 'signature-answer' },
-      },
-      {
-        type: 'text',
-        text: '',
-        meta: { thought_signature: 'signature-empty' },
-      },
-    ]);
-
     const omitWorkDir = path.join(TEST_ROOT, `agent-omit-work-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
     const omitStoreDir = path.join(TEST_ROOT, `agent-omit-store-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+    ensureCleanDir(workDir);
+    ensureCleanDir(storeDir);
     ensureCleanDir(omitWorkDir);
     ensureCleanDir(omitStoreDir);
-    const omitStore = new JSONStore(omitStoreDir);
-    const omitAgent = await Agent.create(
-      {
-        templateId: 'signed-stream-template',
-        model: new SignedStreamProvider(),
-        exposeThinking: true,
-        retainThinking: false,
-        sandbox: { kind: 'local', workDir: omitWorkDir, enforceBoundary: true, watchFiles: false },
-      },
-      {
-        store: omitStore,
-        templateRegistry: templates,
-        sandboxFactory: new SandboxFactory(),
-        toolRegistry: new ToolRegistry(),
+
+    try {
+      const templates = new AgentTemplateRegistry();
+      templates.register({
+        id: 'signed-stream-template',
+        systemPrompt: 'test signed stream metadata',
+        tools: [],
+        permission: { mode: 'auto' },
+      });
+      const store = new JSONStore(storeDir);
+      const agent = await Agent.create(
+        {
+          templateId: 'signed-stream-template',
+          model: new SignedStreamProvider(),
+          exposeThinking: true,
+          retainThinking: true,
+          sandbox: { kind: 'local', workDir, enforceBoundary: true, watchFiles: false },
+        },
+        {
+          store,
+          templateRegistry: templates,
+          sandboxFactory: new SandboxFactory(),
+          toolRegistry: new ToolRegistry(),
+        }
+      );
+
+      const retainedResult = await agent.chat('preserve signed parts');
+      expect.toEqual(retainedResult.text, 'ANSWER');
+      const messages = await store.loadMessages(agent.agentId);
+      const assistant = messages.find((message) => message.role === 'assistant');
+      expect.toDeepEqual(assistant?.content, [
+        {
+          type: 'reasoning',
+          reasoning: 'PLAN',
+          meta: { thought_signature: 'signature-thought' },
+        },
+        {
+          type: 'text',
+          text: 'ANSWER',
+          meta: { thought_signature: 'signature-answer' },
+        },
+        {
+          type: 'text',
+          text: '',
+          meta: { thought_signature: 'signature-empty' },
+        },
+      ]);
+
+      const omitStore = new JSONStore(omitStoreDir);
+      const omitAgent = await Agent.create(
+        {
+          templateId: 'signed-stream-template',
+          model: new SignedStreamProvider(),
+          exposeThinking: true,
+          retainThinking: false,
+          sandbox: { kind: 'local', workDir: omitWorkDir, enforceBoundary: true, watchFiles: false },
+        },
+        {
+          store: omitStore,
+          templateRegistry: templates,
+          sandboxFactory: new SandboxFactory(),
+          toolRegistry: new ToolRegistry(),
+        }
+      );
+
+      const progressTypes: string[] = [];
+      for await (const envelope of omitAgent.chatStream('omit thought history')) {
+        progressTypes.push(envelope.event.type);
       }
-    );
-
-    const progressTypes: string[] = [];
-    for await (const envelope of omitAgent.chatStream('omit thought history')) {
-      progressTypes.push(envelope.event.type);
+      expect.toDeepEqual(progressTypes, [
+        'think_chunk_start',
+        'think_chunk',
+        'think_chunk_end',
+        'text_chunk_start',
+        'text_chunk',
+        'text_chunk_end',
+        'text_chunk_start',
+        'text_chunk_end',
+        'done',
+      ]);
+      const omitMessages = await omitStore.loadMessages(omitAgent.agentId);
+      const omittedAssistant = omitMessages.find((message) => message.role === 'assistant');
+      expect.toDeepEqual(omittedAssistant?.content, [
+        {
+          type: 'text',
+          text: 'ANSWER',
+          meta: { thought_signature: 'signature-answer' },
+        },
+        {
+          type: 'text',
+          text: '',
+          meta: { thought_signature: 'signature-empty' },
+        },
+      ]);
+      expect.toBeFalsy(JSON.stringify(omittedAssistant).includes('PLAN'));
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(storeDir, { recursive: true, force: true });
+      fs.rmSync(omitWorkDir, { recursive: true, force: true });
+      fs.rmSync(omitStoreDir, { recursive: true, force: true });
     }
-    expect.toDeepEqual(progressTypes, [
-      'think_chunk_start',
-      'think_chunk',
-      'think_chunk_end',
-      'text_chunk_start',
-      'text_chunk',
-      'text_chunk_end',
-      'text_chunk_start',
-      'text_chunk_end',
-      'done',
-    ]);
-    const omitMessages = await omitStore.loadMessages(omitAgent.agentId);
-    const omittedAssistant = omitMessages.find((message) => message.role === 'assistant');
-    expect.toDeepEqual(omittedAssistant?.content, [
-      {
-        type: 'text',
-        text: 'ANSWER',
-        meta: { thought_signature: 'signature-answer' },
-      },
-      {
-        type: 'text',
-        text: '',
-        meta: { thought_signature: 'signature-empty' },
-      },
-    ]);
-    expect.toBeFalsy(JSON.stringify(omittedAssistant).includes('PLAN'));
-
-    fs.rmSync(workDir, { recursive: true, force: true });
-    fs.rmSync(storeDir, { recursive: true, force: true });
-    fs.rmSync(omitWorkDir, { recursive: true, force: true });
-    fs.rmSync(omitStoreDir, { recursive: true, force: true });
   })
 
   .test('Agent Gemini modelConfig forwards thinking and emits isolated thought events', async () => {

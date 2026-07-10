@@ -212,6 +212,75 @@ runner
       globalThis.fetch = originalFetch;
     }
   })
+  .test('stream detects a JSON-array fallback with an SSE content type', async () => {
+    const provider = new GeminiProvider('test-key', 'gemini-2.5-pro');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify([
+          {
+            candidates: [{ content: { parts: [{ text: 'fallback answer' }] } }],
+          },
+        ]),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )) as any;
+
+    try {
+      const chunks = await collectStream(provider);
+      expect.toDeepEqual(chunks, [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'fallback answer' },
+        },
+        { type: 'content_block_stop', index: 0 },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  })
+  .test('stream expands a JSON array contained in one SSE data frame', async () => {
+    const provider = new GeminiProvider('test-key', 'gemini-2.5-pro');
+    const originalFetch = globalThis.fetch;
+    const events = [
+      { candidates: [{ content: { parts: [{ text: 'first' }] } }] },
+      { candidates: [{ content: { parts: [{ text: ' second' }] } }] },
+    ];
+    globalThis.fetch = (async () =>
+      new Response(`data: ${JSON.stringify(events)}\n\n`, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })) as any;
+
+    try {
+      const chunks = await collectStream(provider);
+      expect.toDeepEqual(chunks, [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'first' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: ' second' },
+        },
+        { type: 'content_block_stop', index: 0 },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  })
   .test('stream parses CRLF SSE frames with multiline data split across network chunks', async () => {
     const provider = new GeminiProvider('test-key', 'gemini-2.5-pro', undefined, undefined, {
       reasoningTransport: 'provider',
@@ -284,6 +353,48 @@ runner
       globalThis.fetch = originalFetch;
     }
   })
+  .test('stream closes an active block before reporting a later malformed SSE frame', async () => {
+    const provider = new GeminiProvider('test-key', 'gemini-2.5-pro');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        [
+          `data: ${JSON.stringify({
+            candidates: [{ content: { parts: [{ text: 'partial thought', thought: true }] } }],
+          })}\n\n`,
+          'data: {"candidates":\n\n',
+        ].join(''),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } }
+      )) as any;
+
+    try {
+      const chunks: any[] = [];
+      let thrown: any;
+      try {
+        for await (const chunk of provider.stream([], { thinking: { budgetTokens: 1024 } })) {
+          chunks.push(chunk);
+        }
+      } catch (error) {
+        thrown = error;
+      }
+      expect.toContain(String(thrown?.message), 'Gemini stream parse error in SSE frame 2');
+      expect.toDeepEqual(chunks, [
+        {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'reasoning', reasoning: '' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'reasoning_delta', text: 'partial thought' },
+        },
+        { type: 'content_block_stop', index: 0 },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  })
   .test('complete keeps native thoughts separate from answer text in text transport', async () => {
     const provider = new GeminiProvider('test-key', 'gemini-2.5-pro', undefined, undefined, {
       reasoningTransport: 'text',
@@ -321,7 +432,11 @@ runner
       {
         role: 'assistant',
         content: [
-          { type: 'reasoning', reasoning: 'PLAN' },
+          {
+            type: 'reasoning',
+            reasoning: 'PLAN',
+            meta: { thought_signature: 'native-signature' },
+          },
           { type: 'text', text: 'ANSWER' },
         ],
       },
@@ -329,7 +444,10 @@ runner
     const cases: Array<{ transport: 'provider' | 'text' | 'omit'; expected: any[] }> = [
       {
         transport: 'provider',
-        expected: [{ text: 'PLAN', thought: true }, { text: 'ANSWER' }],
+        expected: [
+          { text: 'PLAN', thought: true, thoughtSignature: 'native-signature' },
+          { text: 'ANSWER' },
+        ],
       },
       {
         transport: 'text',
@@ -943,7 +1061,7 @@ runner
       },
     ]);
   })
-  .test('stream uses only the first Gemini candidate like complete', async () => {
+  .test('stream preserves the existing behavior of emitting all Gemini candidates', async () => {
     const provider = new GeminiProvider('test-key', 'gemini-2.5-pro');
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () =>
@@ -969,6 +1087,11 @@ runner
           type: 'content_block_delta',
           index: 0,
           delta: { type: 'text_delta', text: 'first candidate' },
+        },
+        {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'second candidate' },
         },
         { type: 'content_block_stop', index: 0 },
       ]);
