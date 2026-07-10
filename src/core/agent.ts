@@ -474,6 +474,11 @@ export class Agent {
     if (lastAssistant) {
       const combined = lastAssistant.content
         .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+        .filter(
+          (block) =>
+            block.text.length > 0 ||
+            !(block.meta?.thought_signature || block.meta?.thoughtSignature)
+        )
         .map((block) => block.text)
         .join('\n');
       if (combined.trim().length > 0) {
@@ -1068,12 +1073,20 @@ export class Agent {
           if (chunk.content_block?.type === 'text') {
             currentBlockIndex = chunk.index ?? 0;
             textBuffers.set(currentBlockIndex, '');
-            assistantBlocks[currentBlockIndex] = { type: 'text', text: '' };
+            assistantBlocks[currentBlockIndex] = {
+              type: 'text',
+              text: '',
+              ...(chunk.content_block.meta ? { meta: chunk.content_block.meta } : {}),
+            };
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk_start', step: this.stepCount });
           } else if (chunk.content_block?.type === 'reasoning') {
             currentBlockIndex = chunk.index ?? 0;
             reasoningBuffers.set(currentBlockIndex, '');
-            assistantBlocks[currentBlockIndex] = { type: 'reasoning', reasoning: '' };
+            assistantBlocks[currentBlockIndex] = {
+              type: 'reasoning',
+              reasoning: '',
+              ...(chunk.content_block.meta ? { meta: chunk.content_block.meta } : {}),
+            };
             if (this.exposeThinking) {
               this.events.emitProgress({ channel: 'progress', type: 'think_chunk_start', step: this.stepCount });
             }
@@ -1161,7 +1174,8 @@ export class Agent {
       const storedBlocks = this.retainThinking
         ? originalBlocks
         : originalBlocks.filter((block) => block.type !== 'reasoning');
-      const metadata = this.buildMessageMetadata(originalBlocks, storedBlocks, this.retainThinking ? 'provider' : 'omit');
+      const metadataBlocks = this.retainThinking ? originalBlocks : storedBlocks;
+      const metadata = this.buildMessageMetadata(metadataBlocks, storedBlocks, this.retainThinking ? 'provider' : 'omit');
 
       this.messages.push({ role: 'assistant', content: storedBlocks, metadata });
       await this.persistMessages();
@@ -2507,6 +2521,7 @@ function ensureModelFactory(factory?: ModelFactory): ModelFactory {
         extraBody: config.extraBody,
         providerOptions: config.providerOptions,
         multimodal: config.multimodal,
+        thinking: config.thinking,
       });
     }
     if (config.provider === 'glm') {
