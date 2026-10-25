@@ -24,6 +24,7 @@ export interface Sandbox {
   watchFiles?(paths: string[], listener: (event: { path: string; mtimeMs: number }) => void): Promise<string>;
   unwatchFiles?(id: string): void;
   dispose?(): Promise<void> | void;
+  toConfig?(): { kind: SandboxKind } & Record<string, any>;
 }
 
 export interface LocalSandboxOptions {
@@ -60,6 +61,13 @@ export class LocalSandbox implements Sandbox {
   private readonly enforceBoundary: boolean;
   private readonly allowPaths: string[];
   private readonly watchEnabled: boolean;
+
+  toConfig() {
+    return {
+      kind: this.kind, workDir: this.workDir, enforceBoundary: this.enforceBoundary,
+      allowPaths: [...this.allowPaths], watchFiles: this.watchEnabled,
+    };
+  }
 
   constructor(opts: LocalSandboxOptions = {}) {
     const path = require('path');

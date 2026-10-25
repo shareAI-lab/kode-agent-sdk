@@ -26,7 +26,7 @@ runner
     expect.toEqual(peakConcurrency <= 2, true);
   })
 
-  .test('clear会丢弃等待队列', async () => {
+  .test('clear会拒绝等待队列且不执行任务', async () => {
     const runnerInstance = new ToolRunner(1);
     const results: number[] = [];
 
@@ -42,7 +42,7 @@ runner
         results.push(2);
         return 2;
       })
-      .catch(() => {});
+      .catch(error => { expect.toContain(error.message, 'cancelled'); });
 
     runnerInstance.clear();
 
@@ -54,7 +54,7 @@ runner
       second.then(() => 'resolved'),
       new Promise((resolve) => setTimeout(() => resolve('timeout'), 20)),
     ]);
-    expect.toEqual(outcome, 'timeout');
+    expect.toEqual(outcome, 'resolved');
   })
 
   .test('任务失败不会阻塞队列并保持后续执行', async () => {
