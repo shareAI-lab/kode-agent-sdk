@@ -190,6 +190,54 @@ runner
     expect.toEqual(await store.exists('agent'), true);
   });
 
+runner.test('metadata remains readable while a replacement is being written', async () => {
+  const dir = createDir('meta-atomic');
+  const store = new JSONStore(dir);
+  const initial = { agentId: 'agent', templateId: 'tpl', createdAt: new Date().toISOString(), lineage: [], configVersion: 'test', messageCount: 0, lastSfpIndex: 0, metadata: {} };
+  await store.saveInfo('agent', initial);
+  const write = (store as any).writeFileSafe.bind(store);
+  let release!: () => void;
+  let started!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const writing = new Promise<void>((resolve) => { started = resolve; });
+  (store as any).writeFileSafe = async (file: string, data: string) => {
+    await write(file, '');
+    started();
+    await gate;
+    await write(file, data);
+  };
+  const replacement = store.saveInfo('agent', { ...initial, messageCount: 1 });
+  try {
+    await writing;
+    const visible = await store.loadInfo('agent');
+    const exists = await store.exists('agent');
+    release();
+    await replacement;
+    expect.toEqual(visible?.messageCount, 0);
+    expect.toEqual(exists, true);
+    expect.toEqual((await store.loadInfo('agent'))?.messageCount, 1);
+  } finally {
+    release();
+    await replacement.catch(() => undefined);
+    (store as any).writeFileSafe = write;
+  }
+});
+
+runner.test('failed metadata replacement preserves the last complete snapshot', async () => {
+  const dir = createDir('meta-failure');
+  const store = new JSONStore(dir);
+  const initial = { agentId: 'agent', templateId: 'tpl', createdAt: new Date().toISOString(), lineage: [], configVersion: 'test', messageCount: 0, lastSfpIndex: 0, metadata: {} };
+  await store.saveInfo('agent', initial);
+  const write = (store as any).writeFileSafe.bind(store);
+  (store as any).writeFileSafe = async (file: string) => { await write(file, ''); throw new Error('disk full'); };
+  try {
+    await expect.toThrow(() => store.saveInfo('agent', { ...initial, messageCount: 1 }));
+  } finally { (store as any).writeFileSafe = write; }
+  expect.toEqual((await store.loadInfo('agent'))?.messageCount, 0);
+  expect.toEqual(await store.exists('agent'), true);
+  expect.toEqual(fs.readdirSync(path.join(dir, 'agent')).filter(file => file.endsWith('.tmp')).length, 0);
+});
+
 export async function run() {
   return await runner.run();
 }
