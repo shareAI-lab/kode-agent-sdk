@@ -48,23 +48,23 @@ runner
 
     const events: number[] = [];
     let timeout: NodeJS.Timeout | undefined;
-    let observed!: () => void;
-    const change = new Promise<void>((resolve, reject) => {
-      observed = resolve;
-      timeout = setTimeout(() => reject(new Error('File change was not observed within 2 seconds')), 2000);
-    });
-    const id = await sandbox.watchFiles(['file.txt'], (evt) => {
-      events.push(evt.mtimeMs);
-      observed();
-    });
-
+    let observed = () => {};
+    let id: string | undefined;
     try {
+      id = await sandbox.watchFiles(['file.txt'], (evt) => {
+        events.push(evt.mtimeMs);
+        observed();
+      });
+      const change = new Promise<void>((resolve, reject) => {
+        observed = resolve;
+        timeout = setTimeout(() => reject(new Error('File change was not observed within 2 seconds')), 2000);
+      });
       fs.writeFileSync(file, 'updated');
       await change;
       expect.toBeGreaterThan(events.length, 0);
     } finally {
       clearTimeout(timeout);
-      sandbox.unwatchFiles?.(id);
+      if (id) sandbox.unwatchFiles?.(id);
       await sandbox.dispose?.();
     }
   });

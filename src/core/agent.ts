@@ -54,6 +54,15 @@ import { logger } from '../utils/logger';
 
 const CONFIG_VERSION = 'v2.7.0';
 
+const PROCESSING_STEP = Symbol('processingStep');
+interface ProcessingStep {
+  finished: Promise<void>;
+  error?: Error;
+  done?: boolean;
+  text?: string;
+}
+type StepEnvelope = AgentEventEnvelope<ProgressEvent> & { [PROCESSING_STEP]?: ProcessingStep };
+
 export interface ModelFactory {
   (config: ModelConfig): ModelProvider;
 }
@@ -353,16 +362,19 @@ export class Agent {
 
     const template = deps.templateRegistry.get(config.templateId);
 
+    const sandboxInstance = config.sandbox && 'exec' in config.sandbox ? config.sandbox as Sandbox : undefined;
     const sandboxConfigSource: SandboxConfig | undefined =
-      config.sandbox && 'kind' in config.sandbox
-        ? (config.sandbox as SandboxConfig)
+      sandboxInstance
+        ? sandboxInstance.toConfig?.() ?? { kind: sandboxInstance.kind, requiresInstance: true }
+        : config.sandbox
+        ? config.sandbox as SandboxConfig
         : (template.sandbox as SandboxConfig | undefined);
     const sandboxConfig: SandboxConfig | undefined = sandboxConfigSource
       ? { ...sandboxConfigSource }
       : undefined;
 
-    const sandbox = typeof config.sandbox === 'object' && 'exec' in config.sandbox
-      ? (config.sandbox as Sandbox)
+    const sandbox = sandboxInstance
+      ? sandboxInstance
       : await deps.sandboxFactory.createAsync(sandboxConfig || { kind: 'local', workDir: process.cwd() });
 
     // OpenSandbox creates sandbox id at runtime; persist it for strict resume.
@@ -431,64 +443,45 @@ export class Agent {
     opts?: StreamOptions
   ): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
     const since = opts?.since ?? this.lastBookmark ?? this.events.getLastBookmark();
-    await this.send(input);
-
-    const subscription = this.events.subscribeProgress({ since, kinds: opts?.kinds });
-    let seenNonDone = false;
-    for await (const event of subscription) {
-      if (event.event.type === 'done') {
-        if (since && event.bookmark.seq <= since.seq) {
-          continue;
-        }
-        if (!seenNonDone) {
-          yield event;
-          this.lastBookmark = event.bookmark;
+    const kinds = opts?.kinds ? Array.from(new Set([...opts.kinds, 'done' as const])) : undefined;
+    const iterator = this.events.subscribeProgress({ since, kinds })[Symbol.asyncIterator]();
+    try {
+      await this.send(input);
+      for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
+        const envelope = next.value as StepEnvelope;
+        if (envelope.event.type === 'done') {
+          if (since && envelope.bookmark.seq <= since.seq) continue;
+          const step = envelope[PROCESSING_STEP];
+          await step?.finished;
+          if (step?.error) throw step.error;
+          if (!opts?.kinds || opts.kinds.includes('done')) yield envelope;
           break;
         }
-        yield event;
-        this.lastBookmark = event.bookmark;
-        break;
+        yield envelope;
       }
-
-      seenNonDone = true;
-      yield event;
+    } finally {
+      await iterator.return?.();
     }
   }
 
   async chat(input: string | ContentBlock[], opts?: StreamOptions): Promise<CompleteResult> {
     let streamedText = '';
     let bookmark: Bookmark | undefined;
-    for await (const envelope of this.chatStream(input, opts)) {
-      if (envelope.event.type === 'text_chunk') {
-        streamedText += envelope.event.delta;
-      }
+    let resultStep: ProcessingStep | undefined;
+    let interrupted = false;
+    const streamOpts = opts?.kinds ? { ...opts, kinds: Array.from(new Set([...opts.kinds, 'done' as const])) } : opts;
+    for await (const envelope of this.chatStream(input, streamOpts)) {
+      if (envelope.event.type === 'text_chunk') streamedText += envelope.event.delta;
       if (envelope.event.type === 'done') {
         bookmark = envelope.bookmark;
+        resultStep = (envelope as StepEnvelope)[PROCESSING_STEP];
+        interrupted = envelope.event.reason === 'interrupted';
       }
     }
-
     const pending = Array.from(this.pendingPermissions.keys());
-
-    let finalText = streamedText;
-    const lastAssistant = [...this.messages].reverse().find((message) => message.role === 'assistant');
-    if (lastAssistant) {
-      const combined = lastAssistant.content
-        .filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
-        .filter(
-          (block) =>
-            block.text.length > 0 ||
-            !(block.meta?.thought_signature || block.meta?.thoughtSignature)
-        )
-        .map((block) => block.text)
-        .join('\n');
-      if (combined.trim().length > 0) {
-        finalText = combined;
-      }
-    }
-
     return {
-      status: pending.length ? 'paused' : 'ok',
-      text: finalText,
+      status: interrupted || pending.length ? 'paused' : 'ok',
+      text: interrupted ? streamedText : resultStep?.text ?? streamedText,
       last: bookmark,
       permissionIds: pending,
     };
@@ -561,23 +554,15 @@ export class Agent {
       decidedBy: 'api',
       note,
     });
-    if (decision === 'allow') {
-      this.setState('WORKING');
-      this.setBreakpoint('PRE_TOOL');
-      this.ensureProcessing();
-    } else {
-      this.setBreakpoint('POST_TOOL');
-      this.setState('READY');
-    }
+    this.setState(this.pendingPermissions.size ? 'PAUSED' : this.processingPromise ? 'WORKING' : 'READY');
+    this.setBreakpoint(this.pendingPermissions.size ? 'AWAITING_APPROVAL' : decision === 'allow' ? 'PRE_TOOL' : 'POST_TOOL');
   }
 
   async interrupt(opts?: { note?: string }): Promise<void> {
-    this.interrupted = true;
+    this.interrupted = this.processingPromise !== null;
     this.toolRunner.clear();
-    for (const controller of this.toolControllers.values()) {
-      controller.abort();
-    }
-    this.toolControllers.clear();
+    for (const controller of this.toolControllers.values()) controller.abort();
+    for (const id of Array.from(this.pendingPermissions.keys())) await this.decide(id, 'deny', opts?.note || 'Interrupted by user');
     await this.appendSyntheticToolResults(opts?.note || 'Interrupted by user');
     this.setState('READY');
     this.setBreakpoint('READY');
@@ -789,15 +774,23 @@ export class Agent {
       );
     }
 
+    const sandboxInstance = config.sandbox && 'exec' in config.sandbox ? config.sandbox as Sandbox : undefined;
+    const sandboxConfig: SandboxConfig | undefined = sandboxInstance
+      ? sandboxInstance.toConfig?.() ?? { kind: sandboxInstance.kind, requiresInstance: true }
+      : config.sandbox as SandboxConfig | undefined ?? metadata.sandboxConfig;
     let sandbox: Sandbox;
     try {
-      sandbox = await deps.sandboxFactory.createAsync(metadata.sandboxConfig || { kind: 'local', workDir: process.cwd() });
+      if (!sandboxInstance && sandboxConfig?.requiresInstance) {
+        throw new Error('Resume requires an explicit sandbox instance; this sandbox does not provide toConfig().');
+      }
+      sandbox = sandboxInstance || await deps.sandboxFactory.createAsync(sandboxConfig || { kind: 'local', workDir: process.cwd() });
     } catch (error: any) {
       throw new ResumeError('SANDBOX_INIT_FAILED', error?.message || 'Failed to create sandbox');
     }
-    const model = metadata.modelConfig
-      ? ensureModelFactory(deps.modelFactory)(metadata.modelConfig)
-      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model || 'claude-sonnet-4-5-20250929' });
+    const modelConfig = config.modelConfig ?? metadata.modelConfig;
+    const model = config.model ?? (modelConfig
+      ? ensureModelFactory(deps.modelFactory)(modelConfig)
+      : ensureModelFactory(deps.modelFactory)({ provider: 'anthropic', model: template.model || 'claude-sonnet-4-5-20250929' }));
 
     const toolInstances = metadata.tools.map((descriptor) => {
       try {
@@ -810,7 +803,7 @@ export class Agent {
       }
     });
 
-    const permissionConfig = metadata.permission || template.permission || { mode: 'auto' };
+    const permissionConfig = config.overrides?.permission ?? metadata.permission ?? template.permission ?? { mode: 'auto' };
     const normalizedPermission: PermissionConfig = {
       ...permissionConfig,
       mode: permissionConfig.mode || 'auto',
@@ -821,23 +814,23 @@ export class Agent {
         ...config,
         agentId,
         templateId: templateId,
-        exposeThinking: metadata.exposeThinking,
-        retainThinking: metadata.retainThinking,
-        multimodalContinuation: metadata.multimodalContinuation,
-        multimodalRetention: metadata.multimodalRetention,
+        exposeThinking: config.exposeThinking ?? metadata.exposeThinking,
+        retainThinking: config.retainThinking ?? metadata.retainThinking,
+        multimodalContinuation: config.multimodalContinuation ?? metadata.multimodalContinuation,
+        multimodalRetention: config.multimodalRetention ?? metadata.multimodalRetention,
       },
       deps,
       {
         template,
         model,
         sandbox,
-        sandboxConfig: metadata.sandboxConfig,
+        sandboxConfig,
         tools: toolInstances,
         toolDescriptors: metadata.tools,
         permission: normalizedPermission,
-        todoConfig: metadata.todo,
-        subagents: metadata.subagents,
-        context: metadata.context,
+        todoConfig: config.overrides?.todo ?? metadata.todo,
+        subagents: config.overrides?.subagents ?? metadata.subagents,
+        context: config.context ?? metadata.context,
       }
     );
 
@@ -959,69 +952,58 @@ export class Agent {
   }
 
   private ensureProcessing() {
-    // 检查是否超时
     if (this.processingPromise) {
-      const now = Date.now();
-      if (now - this.lastProcessingStart > this.PROCESSING_TIMEOUT) {
+      this.pendingNextRound = true;
+      if (Date.now() - this.lastProcessingStart > this.PROCESSING_TIMEOUT) {
         this.events.emitMonitor({
-          channel: 'monitor',
-          type: 'error',
-          severity: 'error',
-          phase: 'lifecycle',
-          message: 'Processing timeout detected, forcing restart',
-          detail: {
-            lastStart: this.lastProcessingStart,
-            elapsed: now - this.lastProcessingStart
-          }
+          channel: 'monitor', type: 'error', severity: 'error', phase: 'lifecycle',
+          message: 'Processing timeout detected; interrupt the active turn before retrying',
         });
-        this.processingPromise = null; // 强制重启
-      } else {
-        // 正常执行中，设置标志位表示需要下一轮
-        this.pendingNextRound = true;
-        return;
       }
+      return;
     }
-
-    // 清除标志位，准备启动新的处理
     this.pendingNextRound = false;
-
     this.lastProcessingStart = Date.now();
-    this.processingPromise = this.runStep()
-      .finally(() => {
-        this.processingPromise = null;
-        // 如果有下一轮待处理，启动它
-        if (this.pendingNextRound) {
-          this.ensureProcessing();
-        }
-      })
-      .catch((err) => {
-        // 确保异常不会导致状态卡住
+    const step: ProcessingStep = { finished: Promise.resolve() };
+    this.processingPromise = step.finished = this.runStep(step)
+      .catch(async (error) => {
+        step.error = error instanceof Error ? error : new Error(String(error));
         this.events.emitMonitor({
-          channel: 'monitor',
-          type: 'error',
-          severity: 'error',
-          phase: 'lifecycle',
-          message: 'Processing failed',
-          detail: { error: err.message, stack: err.stack }
+          channel: 'monitor', type: 'error', severity: 'error', phase: 'lifecycle',
+          message: 'Processing failed', detail: { error: step.error.message },
         });
+        if (!step.done) await this.finishStep(step, 'interrupted');
+      })
+      .catch(() => { /* The original failure is delivered to chat consumers. */ })
+      .finally(() => {
+        this.interrupted = false;
+        this.processingPromise = null;
         this.setState('READY');
         this.setBreakpoint('READY');
+        if (this.pendingNextRound) this.ensureProcessing();
       });
   }
 
-  private async runStep(): Promise<void> {
-    if (this.state !== 'READY') return;
-    if (this.interrupted) {
-      this.interrupted = false;
-      return;
-    }
+  private async finishStep(step: ProcessingStep, reason: 'completed' | 'interrupted'): Promise<void> {
+    const envelope = this.events.emitProgress({ channel: 'progress', type: 'done', step: this.stepCount, reason });
+    Object.defineProperty(envelope, PROCESSING_STEP, { value: step });
+    step.done = true;
+    this.lastBookmark = envelope.bookmark;
+    this.stepCount++;
+    this.scheduler.notifyStep(this.stepCount);
+    this.todoManager.onStep();
+    await this.persistInfo();
+    this.events.emitMonitor({ channel: 'monitor', type: 'step_complete', step: this.stepCount, bookmark: envelope.bookmark });
+  }
 
+  private async runStep(step: ProcessingStep): Promise<void> {
+    if (this.state !== 'READY') return;
     this.setState('WORKING');
     this.setBreakpoint('PRE_MODEL');
-    let doneEmitted = false;
 
     try {
       await this.messageQueue.flush();
+      if (this.interrupted) return;
       const usage = this.contextManager.analyze(this.messages);
       if (usage.shouldCompress) {
         this.events.emitMonitor({
@@ -1053,6 +1035,7 @@ export class Agent {
       }
 
       await this.hooks.runPreModel(this.messages);
+      if (this.interrupted) return;
 
       this.setBreakpoint('STREAMING_MODEL');
       let assistantBlocks: ContentBlock[] = [];
@@ -1069,6 +1052,7 @@ export class Agent {
       const reasoningBuffers = new Map<number, string>();
 
       for await (const chunk of stream) {
+        if (this.interrupted) break;
         if (chunk.type === 'content_block_start') {
           if (chunk.content_block?.type === 'text') {
             currentBlockIndex = chunk.index ?? 0;
@@ -1165,10 +1149,12 @@ export class Agent {
         }
       }
 
+      if (this.interrupted) return;
       assistantBlocks = this.compactContentBlocks(assistantBlocks);
       assistantBlocks = this.splitThinkBlocksIfNeeded(assistantBlocks);
 
       await this.hooks.runPostModel({ role: 'assistant', content: assistantBlocks } as any);
+      if (this.interrupted) return;
 
       const originalBlocks = assistantBlocks;
       const storedBlocks = this.retainThinking
@@ -1179,11 +1165,13 @@ export class Agent {
 
       this.messages.push({ role: 'assistant', content: storedBlocks, metadata });
       await this.persistMessages();
+      if (this.interrupted) return;
 
       const toolBlocks = assistantBlocks.filter((block) => block.type === 'tool_use');
       if (toolBlocks.length > 0) {
         this.setBreakpoint('TOOL_PENDING');
         const outcomes = await this.executeTools(toolBlocks);
+        if (this.interrupted) return;
         if (outcomes.length > 0) {
           this.messages.push({ role: 'user', content: outcomes });
           this.lastSfpIndex = this.messages.length - 1;
@@ -1197,51 +1185,22 @@ export class Agent {
         this.lastSfpIndex = this.messages.length - 1;
       }
 
-      const previousBookmark = this.lastBookmark;
-      const envelope = this.events.emitProgress({
-        channel: 'progress',
-        type: 'done',
-        step: this.stepCount,
-        reason: this.pendingPermissions.size > 0 ? 'interrupted' : 'completed',
-      });
-      doneEmitted = true;
-      this.lastBookmark = envelope.bookmark;
-      this.stepCount++;
-      this.scheduler.notifyStep(this.stepCount);
-      this.todoManager.onStep();
-      if (!previousBookmark || previousBookmark.seq !== this.lastBookmark.seq) {
-        await this.persistInfo();
-      }
-      this.events.emitMonitor({ channel: 'monitor', type: 'step_complete', step: this.stepCount, bookmark: envelope.bookmark });
+      step.text = storedBlocks.filter((block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text')
+        .filter(block => block.text.length > 0 || !(block.meta?.thought_signature || block.meta?.thoughtSignature))
+        .map(block => block.text).join('\n');
+      await this.finishStep(step, 'completed');
     } catch (error: any) {
+      step.error = error instanceof Error ? error : new Error(String(error));
       this.events.emitMonitor({
-        channel: 'monitor',
-        type: 'error',
-        severity: 'error',
-        phase: 'model',
-        message: error?.message || 'Model execution failed',
-        detail: { stack: error?.stack },
+        channel: 'monitor', type: 'error', severity: 'error', phase: 'model',
+        message: step.error.message, detail: { stack: step.error.stack },
       });
-      if (!doneEmitted) {
-        const previousBookmark = this.lastBookmark;
-        const envelope = this.events.emitProgress({
-          channel: 'progress',
-          type: 'done',
-          step: this.stepCount,
-          reason: 'interrupted',
-        });
-        doneEmitted = true;
-        this.lastBookmark = envelope.bookmark;
-        this.stepCount++;
-        this.scheduler.notifyStep(this.stepCount);
-        this.todoManager.onStep();
-        if (!previousBookmark || previousBookmark.seq !== this.lastBookmark.seq) {
-          await this.persistInfo();
-        }
-      }
+      if (!step.done) await this.finishStep(step, 'interrupted');
     } finally {
-      this.setState('READY');
-      this.setBreakpoint('READY');
+      if (this.interrupted && !step.done) {
+        await this.appendSyntheticToolResults('Interrupted by user');
+        await this.finishStep(step, 'interrupted');
+      }
     }
   }
 
@@ -1259,7 +1218,10 @@ export class Agent {
 
     const results = new Map<string, ContentBlock | null>();
 
-    await Promise.all(
+    for (const use of uses) this.registerToolRecord(use);
+    await this.persistToolRecords();
+    if (this.interrupted) return [];
+    const settled = await Promise.allSettled(
       uses.map((use) =>
         this.toolRunner.run(async () => {
           const result = await this.processToolCall(use);
@@ -1270,6 +1232,10 @@ export class Agent {
       )
     );
 
+    if (!this.interrupted) {
+      const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      if (failure) throw failure.reason;
+    }
     await this.persistToolRecords();
 
     const ordered: ContentBlock[] = [];
@@ -1284,7 +1250,8 @@ export class Agent {
 
   private async processToolCall(toolUse: { id: string; name: string; input: any }): Promise<ContentBlock | null> {
     const tool = this.tools.get(toolUse.name);
-    const record = this.registerToolRecord(toolUse);
+    if (this.interrupted) return null;
+    const record = this.toolRecords.get(toolUse.id) || this.registerToolRecord(toolUse);
     this.events.emitProgress({ channel: 'progress', type: 'tool:start', call: this.snapshotToolRecord(record.id) });
 
     if (!tool) {
@@ -1354,6 +1321,7 @@ export class Agent {
       context
     );
 
+    if (this.interrupted) return null;
     if (decision) {
       if ('decision' in decision) {
         if (decision.decision === 'ask') {
@@ -1399,6 +1367,7 @@ export class Agent {
     if (requireApproval) {
       this.setBreakpoint('AWAITING_APPROVAL');
       const decisionResult = await this.requestPermission(record.id, toolUse.name, toolUse.input, approvalMeta);
+      if (this.interrupted) return null;
       if (decisionResult === 'deny') {
         const message = approvalMeta?.reason || 'Denied by approval';
         this.updateToolRecord(record.id, { state: 'DENIED', error: message, isError: true }, 'approval denied');
@@ -1420,6 +1389,7 @@ export class Agent {
 
     try {
       const output = await tool.exec(toolUse.input, context);
+      if (this.interrupted) return null;
 
       // 检查 output 是否包含 ok 字段来判断工具是否成功
       const outputOk = output && typeof output === 'object' && 'ok' in output ? output.ok : true;
@@ -1430,6 +1400,7 @@ export class Agent {
         content: output
       };
       outcome = await this.hooks.runPostToolUse(outcome, context);
+      if (this.interrupted) return null;
 
       // NOTE: recordRead/recordEdit 已在各工具内部调用，此处不再重复调用
       // 参考: fs_read/index.ts:25, fs_write/index.ts:26, fs_edit/index.ts:29,53, fs_multi_edit/index.ts:60,92
@@ -1506,6 +1477,7 @@ export class Agent {
         });
       }
     } catch (error: any) {
+      if (this.interrupted) return null;
       const isAbort = error?.name === 'AbortError';
       const message = isAbort ? 'Tool execution aborted' : error?.message || String(error);
       const errorType = isAbort ? 'aborted' : 'exception';
@@ -1932,6 +1904,7 @@ export class Agent {
     };
     this.updateToolRecord(id, { state: 'APPROVAL_REQUIRED', approval }, 'awaiting approval');
     await this.persistToolRecords();
+    if (this.interrupted) return 'deny';
 
     return new Promise((resolve) => {
       this.pendingPermissions.set(id, {
@@ -1955,6 +1928,8 @@ export class Agent {
         },
       });
 
+      this.setState('PAUSED');
+      this.setBreakpoint('AWAITING_APPROVAL');
       this.events.emitControl({
         channel: 'control',
         type: 'permission_required',
@@ -1963,8 +1938,6 @@ export class Agent {
           await this.decide(id, decision, opts?.note);
         },
       });
-      this.setState('PAUSED');
-      this.setBreakpoint('AWAITING_APPROVAL');
     });
   }
 
