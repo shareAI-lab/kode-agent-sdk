@@ -25,7 +25,7 @@ export interface MessageQueueOptions {
 }
 
 export class MessageQueue {
-  private pending: PendingMessage[] = [];
+  private pending: Array<PendingMessage & { added?: boolean }> = [];
 
   constructor(private readonly options: MessageQueueOptions) {}
 
@@ -58,12 +58,15 @@ export class MessageQueue {
   async flush(): Promise<void> {
     if (this.pending.length === 0) return;
 
-    const queue = this.pending;
+    const queue = [...this.pending];
 
     try {
       // 先添加到消息历史
       for (const entry of queue) {
-        this.options.addMessage(entry.message, entry.kind);
+        if (!entry.added) {
+          this.options.addMessage(entry.message, entry.kind);
+          entry.added = true;
+        }
       }
 
       // 持久化成功后才清空队列

@@ -152,6 +152,44 @@ runner
     expect.toEqual(added.length, previousAdds);
   });
 
+runner.test('持久化期间新入队的消息保留到下一轮 flush', async () => {
+  const added: string[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let writes = 0;
+  const queue = new MessageQueue({
+    wrapReminder: text => text,
+    addMessage: message => added.push((message.content[0] as any).text),
+    persist: async () => { if (++writes === 1) await gate; },
+    ensureProcessing: () => {},
+  });
+  queue.send('first');
+  const flushing = queue.flush();
+  queue.send('second');
+  release();
+  await flushing;
+  await queue.flush();
+  expect.toDeepEqual(added, ['first', 'second']);
+  expect.toEqual(writes, 2);
+});
+
+runner.test('持久化失败重试不会重复追加已加入历史的消息', async () => {
+  const added: string[] = [];
+  let writes = 0;
+  const queue = new MessageQueue({
+    wrapReminder: text => text,
+    addMessage: message => added.push((message.content[0] as any).text),
+    persist: async () => { if (++writes === 1) throw new Error('temporary store failure'); },
+    ensureProcessing: () => {},
+  });
+  queue.send('first');
+  await expect.toThrow(() => queue.flush());
+  queue.send('second');
+  await queue.flush();
+  expect.toDeepEqual(added, ['first', 'second']);
+  expect.toEqual(writes, 2);
+});
+
 export async function run() {
   return await runner.run();
 }
