@@ -1,6 +1,7 @@
 import { Message, Timeline, Snapshot, AgentInfo, ToolCallRecord, AgentChannel } from '../../core/types';
 import { TodoSnapshot } from '../../core/todo';
 import { logger } from '../../utils/logger';
+import { randomUUID } from 'crypto';
 import {
   Store,
   HistoryWindow,
@@ -654,7 +655,17 @@ export class JSONStore implements Store {
   // ========== 元数据管理 ==========
 
   async saveInfo(agentId: string, info: AgentInfo): Promise<void> {
-    await this.writeFileSafe(this.getMetaPath(agentId), JSON.stringify(info, null, 2));
+    const path = this.getMetaPath(agentId);
+    const payload = JSON.stringify(info, null, 2);
+    await this.queueWalWrite(agentId, 'meta', async () => {
+      const temporary = `${path}.${randomUUID()}.tmp`;
+      try {
+        await this.writeFileSafe(temporary, payload);
+        await this.renameSafe(temporary, path);
+      } finally {
+        await require('fs').promises.rm(temporary, { force: true });
+      }
+    });
   }
 
   async loadInfo(agentId: string): Promise<AgentInfo | undefined> {

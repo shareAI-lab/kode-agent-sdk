@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main, develop]
   workflow_dispatch:
+    inputs:
+      run_live_tests:
+        description: 'Run external provider suites (may incur API charges)'
+        type: boolean
+        required: false
+        default: false
 
 env:
   NODE_VERSION: '20'
@@ -79,6 +85,7 @@ jobs:
   # ===========================================================================
   provider-e2e:
     name: Provider E2E
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_tests
     runs-on: ubuntu-latest
     needs: [lint-and-typecheck, unit-tests]
     timeout-minutes: 20
@@ -149,6 +156,7 @@ jobs:
   # ===========================================================================
   agent-integration:
     name: Agent Integration
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_tests
     runs-on: ubuntu-latest
     needs: [provider-e2e]
     timeout-minutes: 30
@@ -184,6 +192,7 @@ jobs:
   # ===========================================================================
   comprehensive-agent-tests:
     name: Comprehensive Agent Tests
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_tests
     runs-on: ubuntu-latest
     needs: [agent-integration]
     timeout-minutes: 45
@@ -231,12 +240,15 @@ jobs:
           echo "Agent Integration: ${{ needs.agent-integration.result }}"
           echo "Comprehensive Agent Tests: ${{ needs.comprehensive-agent-tests.result }}"
 
-          if [ "${{ needs.lint-and-typecheck.result }}" == "failure" ] || \
-             [ "${{ needs.unit-tests.result }}" == "failure" ] || \
+          if [ "${{ needs.lint-and-typecheck.result }}" != "success" ] || \
+             [ "${{ needs.unit-tests.result }}" != "success" ] || \
              [ "${{ needs.provider-e2e.result }}" == "failure" ] || \
+             [ "${{ needs.provider-e2e.result }}" == "cancelled" ] || \
              [ "${{ needs.agent-integration.result }}" == "failure" ] || \
-             [ "${{ needs.comprehensive-agent-tests.result }}" == "failure" ]; then
+             [ "${{ needs.agent-integration.result }}" == "cancelled" ] || \
+             [ "${{ needs.comprehensive-agent-tests.result }}" == "failure" ] || \
+             [ "${{ needs.comprehensive-agent-tests.result }}" == "cancelled" ]; then
             echo "Some tests failed!"
             exit 1
           fi
-          echo "All CI checks passed!"
+          echo "Required checks passed. External model suites run only when explicitly requested."

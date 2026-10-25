@@ -47,16 +47,26 @@ runner
     fs.writeFileSync(file, 'content');
 
     const events: number[] = [];
+    let timeout: NodeJS.Timeout | undefined;
+    let observed!: () => void;
+    const change = new Promise<void>((resolve, reject) => {
+      observed = resolve;
+      timeout = setTimeout(() => reject(new Error('File change was not observed within 2 seconds')), 2000);
+    });
     const id = await sandbox.watchFiles(['file.txt'], (evt) => {
       events.push(evt.mtimeMs);
+      observed();
     });
 
-    fs.writeFileSync(file, 'updated');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    sandbox.unwatchFiles?.(id);
-    expect.toBeGreaterThan(events.length, 0);
-
-    await sandbox.dispose?.();
+    try {
+      fs.writeFileSync(file, 'updated');
+      await change;
+      expect.toBeGreaterThan(events.length, 0);
+    } finally {
+      clearTimeout(timeout);
+      sandbox.unwatchFiles?.(id);
+      await sandbox.dispose?.();
+    }
   });
 
 export async function run() {
