@@ -5,15 +5,17 @@ KODE SDK 使用示例集合。
 ## 快速开始
 
 ```bash
-cd examples
-npm install
+# 在仓库根目录安装并构建，不需要单独安装 examples 的依赖
+npm ci
+npm run build
+npm run example:getting-started -- --mock
 
-# 配置环境变量
+# 真实模型（会产生实际 API 请求）
 export ANTHROPIC_API_KEY=your-api-key
-
-# 运行示例
-npx ts-node getting-started.ts
+npm run example:getting-started
 ```
+
+需要 Node.js 20.18.1–20.x 或 22.x–25.x。`--mock` 不加载 `.env`、不读取凭据、不联网。先构建，再运行 `npm run typecheck:examples` 检查所有示例。下面的表格命令在 `examples/` 目录运行，复用根目录安装的工具和本地包；也可以使用根目录相应的 `example:*` 脚本。
 
 ## 环境变量
 
@@ -51,6 +53,7 @@ export POSTGRES_PASSWORD=your-password
 | 示例 | 说明 | 运行命令 |
 |------|------|----------|
 | getting-started | 入门示例 | `npm run getting-started` |
+| opensandbox | OpenSandbox 自托管沙箱 | `npm run opensandbox` |
 | e2b-usage | E2B 云沙箱 | `npm run e2b -- basic` |
 | agent-inbox | Agent 收件箱模式 | `npm run agent-inbox` |
 | approval | 权限审批控制 | `npm run approval` |

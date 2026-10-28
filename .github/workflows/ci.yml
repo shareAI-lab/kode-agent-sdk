@@ -21,7 +21,7 @@ jobs:
   # Stage 1: Fast checks (run on every commit)
   # ===========================================================================
   lint-and-typecheck:
-    name: Lint & TypeCheck
+    name: TypeCheck & Package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +40,18 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Typecheck examples
+        run: npm run typecheck:examples
+
+      - name: Check documentation
+        run: npm run test:docs
+
+      - name: Check setup script
+        run: npm run test:quickstart
+
+      - name: Check packed package
+        run: npm run test:package -- --native
 
   unit-tests:
     name: Unit Tests
@@ -74,6 +86,7 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
         env:
+          KODE_TEST_POSTGRES: 1
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5433
           POSTGRES_DB: kode_test
@@ -81,7 +94,7 @@ jobs:
           POSTGRES_PASSWORD: testpass123
 
   # ===========================================================================
-  # Stage 2: Provider E2E tests (run on every commit)
+  # Stage 2: Provider E2E tests (explicit opt-in only)
   # ===========================================================================
   provider-e2e:
     name: Provider E2E

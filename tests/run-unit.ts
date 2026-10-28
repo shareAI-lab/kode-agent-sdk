@@ -2,7 +2,8 @@
  * 单元测试运行器
  */
 
-import './helpers/env-setup';
+globalThis.fetch = (async () => { throw new Error('Live fetch is disabled in unit tests'); }) as typeof fetch;
+
 import path from 'path';
 import fg from 'fast-glob';
 import { ensureCleanDir } from './helpers/setup';
@@ -33,9 +34,15 @@ async function runAll() {
 
   let totalPassed = 0;
   let totalFailed = 0;
+  let skippedSuites = 0;
   const allFailures: Array<{ suite: string; test: string; error: Error }> = [];
 
   for (const relativePath of entries) {
+    if (relativePath === 'unit/infra/db/postgres-store.test.ts' && process.env.KODE_TEST_POSTGRES !== '1') {
+      skippedSuites++;
+      console.log('PostgresStore: skipped (set KODE_TEST_POSTGRES=1 to run against a test database)');
+      continue;
+    }
     const moduleName = relativePath.replace(/\.test\.ts$/, '').replace(/\//g, ' › ');
     const importPath = './' + relativePath.replace(/\\/g, '/');
     try {
@@ -64,7 +71,7 @@ async function runAll() {
   }
 
   console.log('\n' + '='.repeat(80));
-  console.log(`总结: ${totalPassed} 通过, ${totalFailed} 失败`);
+  console.log(`总结: ${totalPassed} 通过, ${totalFailed} 失败, ${skippedSuites} 套件跳过`);
   console.log('='.repeat(80) + '\n');
 
   if (allFailures.length > 0) {

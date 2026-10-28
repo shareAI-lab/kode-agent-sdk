@@ -6,6 +6,7 @@
   "scripts": {
     "e2b": "ts-node e2b-usage.ts",
     "getting-started": "ts-node getting-started.ts",
+    "opensandbox": "ts-node opensandbox-usage.ts",
     "agent-inbox": "ts-node 01-agent-inbox.ts",
     "approval": "ts-node 02-approval-control.ts",
     "room": "ts-node 03-room-collab.ts",
@@ -21,7 +22,7 @@
     "nextjs": "ts-node nextjs-api-route.ts"
   },
   "dependencies": {
-    "@shareai-lab/kode-sdk": "^2.7.0",
+    "@shareai-lab/kode-sdk": "file:..",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
@@ -30,6 +31,6 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^20.18.1 || 22.x || 23.x || 24.x || 25.x"
   }
 }

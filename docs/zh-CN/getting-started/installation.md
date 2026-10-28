@@ -2,7 +2,7 @@
 
 ## 环境要求
 
-- **Node.js**: >= 18.0.0
+- **Node.js**: 20.18.1–20.x 或 22.x–25.x（与当前原生 SQLite 依赖一致）
 - **npm** 或 **pnpm** 或 **yarn**
 
 ## 安装
@@ -18,7 +18,44 @@ pnpm add @shareai-lab/kode-sdk
 yarn add @shareai-lab/kode-sdk
 ```
 
+## TypeScript 项目
+
+```bash
+npm install --save-dev typescript ts-node @types/node
+```
+
+先保存 `tsconfig.json`，再运行 `npx ts-node getting-started.ts`：
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
+```
+
+## 源码 checkout
+
+以下命令在仓库根目录运行。先构建再运行示例；示例解析本地包的 `dist` 导出，不会使用较旧的 registry 版本。
+
+```bash
+npm ci
+npm run typecheck
+npm run build
+npm run typecheck:examples
+npm run example:getting-started -- --mock
+```
+
+`./quickstart.sh` 只负责安装和构建。mock 示例不加载 `.env`、不使用密钥、不调用模型；其他模型示例需要 Provider 凭据和网络。SQLite 使用 `better-sqlite3`，平台没有匹配的预编译二进制时需要原生构建工具。当前锁定依赖不支持 Node 18。
+
 ## 环境变量配置
+
+SDK 不会自动加载 `.env`。将密钥、模型和地址显式传给 Provider 构造函数或 `modelConfig`；模型 ID 请选用账号实际可用的模型。
 
 KODE SDK 使用环境变量配置 API 密钥和模型。
 
@@ -67,13 +104,13 @@ $env:OPENAI_MODEL_ID="gpt-4o"  # 可选
 <!-- tabs:start -->
 #### **Linux / macOS**
 ```bash
-export GOOGLE_API_KEY=...
+export GEMINI_API_KEY=...
 export GEMINI_MODEL_ID=gemini-2.0-flash  # 可选
 ```
 
 #### **Windows (PowerShell)**
 ```powershell
-$env:GOOGLE_API_KEY="..."
+$env:GEMINI_API_KEY="..."
 $env:GEMINI_MODEL_ID="gemini-2.0-flash"  # 可选
 ```
 <!-- tabs:end -->

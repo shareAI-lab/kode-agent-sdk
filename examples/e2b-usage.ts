@@ -144,7 +144,7 @@ async function demoTemplate() {
 async function demoAgentIntegration() {
   console.log('\n=== Demo 3: Agent + E2B Integration ===\n');
 
-  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4.5-20250929';
+  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4-5-20250929';
 
   // Create E2B sandbox
   const sandbox = new E2BSandbox({

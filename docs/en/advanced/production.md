@@ -238,25 +238,29 @@ agent.on('token_usage', (event) => {
 ## Security Best Practices
 
 ```typescript
-// Permission configuration
-const agent = await Agent.create({
-  templateId: 'secure-assistant',
-  overrides: {
-    permission: {
-      mode: 'approval',
-      requireApprovalTools: ['bash_run', 'fs_write'],
-      allowTools: ['fs_read', 'fs_glob'],
-    },
-  },
-}, deps);
-
-// Sandbox boundary
+// File API boundary; shell execution retains host-user permissions
 const sandbox = new LocalSandbox({
   workDir: '/app/workspace',
   enforceBoundary: true,
   allowPaths: ['/app/workspace', '/tmp'],
 });
+
+// Permission configuration
+const agent = await Agent.create({
+  templateId: 'secure-assistant',
+  sandbox,
+  overrides: {
+    permission: {
+      mode: 'auto',
+      requireApprovalTools: ['bash_run', 'fs_write'],
+      allowTools: ['fs_read', 'fs_glob', 'fs_write', 'bash_run'],
+    },
+  },
+}, deps);
+
 ```
+
+The allow-list must include tools that require approval: tools absent from it are denied before approval is requested. This configuration allows reads and asks before writing or running a shell command. Register the matching template/tools and an approval handler before sending a request. LocalSandbox is not OS isolation; use a separately isolated backend for untrusted code.
 
 ---
 

@@ -5,15 +5,17 @@ A collection of KODE SDK usage examples.
 ## Quick Start
 
 ```bash
-cd examples
-npm install
+# From the repository root; examples need no separate dependency installation
+npm ci
+npm run build
+npm run example:getting-started -- --mock
 
-# Set environment variables
+# Real model (makes actual API requests)
 export ANTHROPIC_API_KEY=your-api-key
-
-# Run an example
-npx ts-node getting-started.ts
+npm run example:getting-started
 ```
+
+Requires Node.js 20.18.1–20.x or 22.x–25.x. `--mock` does not load `.env`, read credentials or use the network. Build first, then run `npm run typecheck:examples` to check all examples. Commands in the table below run from `examples/`, using the root installation and local package. Corresponding `example:*` scripts also run from the root.
 
 ## Environment Variables
 
@@ -51,6 +53,7 @@ export POSTGRES_PASSWORD=your-password
 | Example | Description | Command |
 |---------|-------------|---------|
 | getting-started | Getting started guide | `npm run getting-started` |
+| opensandbox | OpenSandbox self-hosted sandbox | `npm run opensandbox` |
 | e2b-usage | E2B cloud sandbox | `npm run e2b -- basic` |
 | agent-inbox | Agent inbox pattern | `npm run agent-inbox` |
 | approval | Permission approval control | `npm run approval` |

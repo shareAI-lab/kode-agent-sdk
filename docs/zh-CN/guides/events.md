@@ -56,7 +56,14 @@ for await (const envelope of agent.subscribe(['progress'], { since: lastBookmark
 
 ---
 
+开启 reasoning 后，模型可能将整个输出 token 预算用于思考而未生成最终文本。当前 Agent 仍会以 `done`、`reason: completed` 结束流，不会在该事件中暴露 Provider 的 `finish_reason: length`。应检查回复是否包含可用文本，并按模型配置输出预算；流结束本身不代表已生成答案。
+
 ## Control：审批面
+
+审批没有 SDK 自动截止时间。应用可设置期限，到期后拒绝审批或中断当前轮；收到决定后应清理定时器，避免迟到回调重复决定已结束的审批。
+
+先注册 Control 处理器再发送请求。审批会暂停正在运行的轮次；`chat()` 等待决策，不会立即返回 `paused`。通过 `event.respond()` 或 `agent.decide()` 回复一次。中断轮次会将未决审批按拒绝处理。单轮请求可用 `chatStream()` 统一处理发送、终止事件、模型错误和订阅释放；原始订阅需由应用处理完成和错误。
+
 
 Control 专门处理"需要人类决策"的瞬间。事件数量极少但重要，通常会被持久化到审批系统。
 

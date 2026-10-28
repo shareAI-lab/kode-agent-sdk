@@ -15,79 +15,118 @@
 
 ## 快速开始
 
-**一键启动**（安装依赖并构建）：
+当前 `main` 包含下文说明的尚未发布的生命周期修复。截至 2026-10-25，npm `latest` 为 2.7.5，尚未包含本轮修改。请用源码 checkout 验收这些修复，不能将 npm 安装成功视为当前源码已验证。
+
+需要 **Node.js 20.18.1–20.x 或 22.x–25.x**，与当前原生 SQLite 依赖支持范围一致。按使用场景选择源码仓库或已发布的包。
+
+### 在源码仓库运行
 
 ```bash
-./quickstart.sh
+git clone https://github.com/shareAI-lab/kode-agent-sdk.git
+cd kode-agent-sdk
+npm ci
+npm run build
+npm run example:getting-started -- --mock
 ```
 
-或作为依赖安装：
+mock 模式离线运行，不需要凭据，输出固定回复。`./quickstart.sh` 在 checkout 中安装锁定依赖并构建，不发送模型请求。所有 `example:*` 命令均在仓库根目录运行。真实请求需要设置 `ANTHROPIC_API_KEY`，再去掉 `--mock` 运行。
+
+### 在自己的项目使用 npm 包
 
 ```bash
 npm install @shareai-lab/kode-sdk
+npm install --save-dev typescript ts-node @types/node
 ```
 
-设置环境变量：
+将以下配置保存为 `tsconfig.json`：
 
-<!-- tabs:start -->
-#### **Linux / macOS**
-```bash
-export ANTHROPIC_API_KEY=sk-...
-export ANTHROPIC_MODEL_ID=claude-sonnet-4-20250514  # 可选，默认: claude-sonnet-4-20250514
-export ANTHROPIC_BASE_URL=https://api.anthropic.com  # 可选，默认: https://api.anthropic.com
-```
-
-#### **Windows (PowerShell)**
-```powershell
-$env:ANTHROPIC_API_KEY="sk-..."
-$env:ANTHROPIC_MODEL_ID="claude-sonnet-4-20250514"  # 可选，默认: claude-sonnet-4-20250514
-$env:ANTHROPIC_BASE_URL="https://api.anthropic.com"  # 可选，默认: https://api.anthropic.com
-```
-<!-- tabs:end -->
-
-最简示例：
-
-```typescript
-import { Agent, AnthropicProvider, JSONStore } from '@shareai-lab/kode-sdk';
-
-const provider = new AnthropicProvider(
-  process.env.ANTHROPIC_API_KEY!,
-  process.env.ANTHROPIC_MODEL_ID
-);
-
-const agent = await Agent.create({
-  provider,
-  store: new JSONStore('./.kode'),
-  systemPrompt: '你是一个乐于助人的助手。'
-});
-
-// 订阅 progress 事件
-for await (const envelope of agent.subscribe(['progress'])) {
-  if (envelope.event.type === 'text_chunk') {
-    process.stdout.write(envelope.event.delta);
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
   }
-  if (envelope.event.type === 'done') break;
+}
+```
+
+在终端设置自己的模型凭据；模型与地址由示例显式传给 Provider：
+
+```bash
+export ANTHROPIC_API_KEY=your-key
+export ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929  # 示例 ID，请选择账号实际可用的模型
+export ANTHROPIC_BASE_URL=https://api.anthropic.com  # 可选
+```
+
+Windows PowerShell 使用 `$env:ANTHROPIC_API_KEY="your-key"`，其余变量同理。
+
+将下面的完整代码保存为 `getting-started.ts`，运行 `npx ts-node getting-started.ts`。这会调用真实模型，可能产生使用费用。
+
+<!-- runnable:getting-started -->
+```typescript
+import {
+  Agent, AnthropicProvider, JSONStore, AgentTemplateRegistry,
+  ToolRegistry, SandboxFactory, LocalSandbox,
+} from '@shareai-lab/kode-sdk';
+
+async function main() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY before running this example.');
+  const provider = new AnthropicProvider(
+    apiKey,
+    process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
+    process.env.ANTHROPIC_BASE_URL
+  );
+  const templates = new AgentTemplateRegistry();
+  templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant.' });
+  const sandbox = new LocalSandbox({ workDir: './workspace', enforceBoundary: true, watchFiles: false });
+  try {
+    const agent = await Agent.create(
+      { templateId: 'assistant', model: provider, sandbox },
+      {
+        store: new JSONStore('./.kode'),
+        templateRegistry: templates,
+        toolRegistry: new ToolRegistry(),
+        sandboxFactory: new SandboxFactory(),
+        modelFactory: () => provider,
+      }
+    );
+    for await (const { event } of agent.chatStream('Hello!')) {
+      if (event.type === 'text_chunk') process.stdout.write(event.delta);
+    }
+    console.log();
+  } finally {
+    await sandbox.dispose();
+  }
 }
 
-await agent.send('你好！');
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
 ```
 
-运行示例：
+`Agent.create(config, deps)` 需要两个参数和已注册的模板。`chatStream(input)` 负责发送并消费一轮事件，遇到 `done` 结束，模型错误会使迭代器抛错。`send()` 仅将消息入队并返回消息 ID。同一 Agent 上重叠的 `chat()` / `chatStream()` 会在入队前拒绝，需等待当前轮结束后再调用。使用 `subscribe()` 时，应先并发启动消费者，再 `send()`，并等待消费任务；订阅需通过 `break` 或迭代器 `return()` 关闭。
+
+应用持有 sandbox，并在 `finally` 中释放。需要审批的工具必须在发送前注册 Control 监听器，见[事件指南](docs/zh-CN/guides/events.md)。持久化支持 JSONStore、SQLite 和 PostgreSQL，见[数据库指南](docs/zh-CN/guides/database.md)。SQLite 使用原生依赖，Node/平台没有匹配的预编译二进制时需要本机构建工具。
 
 ```bash
-npm run example:getting-started    # 最简对话
-npm run example:agent-inbox        # 事件驱动收件箱
-npm run example:approval           # 工具审批流程
-npm run example:room               # 多Agent协作
-npm run example:opensandbox        # OpenSandbox 基础使用
+npm run test:onboarding     # 离线公开 API 生命周期回归
+npm run test:quickstart     # 离线安装脚本回归
+npm run test:package        # 构建、本地打包，检查 CJS/ESM/类型和完整文档示例
+npm run typecheck:examples  # 构建后运行
 ```
 
-OpenSandbox 快速配置：
+其他示例可能需要真实模型或外部服务：
 
 ```bash
-export OPEN_SANDBOX_API_KEY=...                      # 可选（仅在服务开启鉴权时需要）
-export OPEN_SANDBOX_ENDPOINT=http://127.0.0.1:8080  # 可选
-export OPEN_SANDBOX_IMAGE=ubuntu                     # 可选
+npm run example:agent-inbox
+npm run example:approval
+npm run example:room
+npm run example:opensandbox
 ```
 
 ## 支持的 Provider

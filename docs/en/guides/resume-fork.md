@@ -32,7 +32,7 @@ const agent = await Agent.resume('agt-demo', {
   sandbox: { kind: 'local', workDir: './workspace', enforceBoundary: true },
 }, deps, {
   strategy: 'crash',  // Auto-seal incomplete tools
-  autoRun: true,      // Continue processing queue after resume
+  autoRun: false,     // Rebind listeners before starting work
 });
 ```
 
@@ -49,6 +49,10 @@ const agent = await Agent.resumeFromStore('agt-demo', deps, {
   },
 });
 ```
+
+Resume uses stored metadata by default. Explicit `model` / `modelConfig`, sandbox, permission, Todo and context overrides take precedence. To rotate credentials or change a model, supply an override or a modelFactory that obtains current configuration. Use `autoRun: false` (the default) so you can rebind approval and monitor listeners before sending; callbacks are not persisted. Stop and finish the original agent before resuming the same ID in another instance.
+
+LocalSandbox instances preserve boundary, allow-path and watch settings via `toConfig()`. A custom sandbox instance without `toConfig()` must be supplied again through `overrides.sandbox` when resuming; the SDK will not silently replace it with a local sandbox.
 
 ### Resume Options
 
@@ -183,50 +187,44 @@ await progressSubscription;
 
 ---
 
-## Complete Resume Example
+## Resume one turn with application-owned dependencies
 
+Register the original template/tools and modelFactory in deps, and keep its persistent store open. This helper receives those dependencies explicitly, creates and disposes its own sandbox, defaults pending tool requests to denial, and returns the next reply. The caller owns closing the store after all agents finish.
+
+<!-- runnable:resume-helper -->
 ```typescript
-import { Agent, createExtendedStore } from '@shareai-lab/kode-sdk';
+import { Agent, AgentDependencies, LocalSandbox } from '@shareai-lab/kode-sdk';
 
-async function resumeAgent(agentId: string) {
-  const store = await createExtendedStore();
-  const deps = createDependencies({ store });
-
-  // Check if Agent exists
-  const exists = await store.exists(agentId);
-  if (!exists) {
-    throw new Error(`Agent ${agentId} not found`);
-  }
-
-  // Resume from store
-  const agent = await Agent.resumeFromStore(agentId, deps, {
-    strategy: 'crash',
-    autoRun: false,
-  });
-
-  // Re-bind Monitor event listeners (on() only supports Control/Monitor events)
-  agent.on('tool_executed', (e) => console.log('Tool:', e.call.name));
-  agent.on('agent_resumed', (e) => {
-    if (e.sealed.length > 0) {
-      console.log('Auto-sealed tools:', e.sealed);
-    }
-  });
-  agent.on('error', (e) => console.error('Error:', e.message));
-
-  // For Progress events, use subscribe()
-  const progressTask = (async () => {
-    for await (const env of agent.subscribe(['progress'])) {
-      if (env.event.type === 'text_chunk') {
-        process.stdout.write(env.event.delta);
+export async function resumeOneTurn(
+  agentId: string,
+  deps: AgentDependencies,
+  workDir: string,
+  input: string
+): Promise<string> {
+  const sandbox = new LocalSandbox({ workDir, enforceBoundary: true, watchFiles: false });
+  const unsubscribe: Array<() => void> = [];
+  let agent: Agent | undefined;
+  try {
+    agent = await Agent.resumeFromStore(agentId, deps, {
+      strategy: 'crash', autoRun: false, overrides: { sandbox },
+    });
+    unsubscribe.push(agent.on('permission_required', event => {
+      void event.respond('deny', { note: 'No interactive approval handler configured' });
+    }));
+    unsubscribe.push(agent.on('error', event => console.error(event.message)));
+    let reply = '';
+    for await (const { event } of agent.chatStream(input)) {
+      if (event.type === 'text_chunk') {
+        process.stdout.write(event.delta);
+        reply += event.delta;
       }
-      if (env.event.type === 'done') break;
     }
-  })();
-
-  // Continue processing
-  await agent.run();
-
-  return agent;
+    return reply;
+  } finally {
+    unsubscribe.forEach(off => off());
+    agent?.schedule().clear();
+    await sandbox.dispose();
+  }
 }
 ```
 

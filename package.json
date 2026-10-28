@@ -6,11 +6,17 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "typecheck:examples": "tsc --project examples/tsconfig.json",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "prepare": "npm run build",
     "test": "npm run test:unit",
-    "test:unit": "ts-node --project tsconfig.json ./tests/run-unit.ts",
+    "test:unit": "npm run build && ts-node --project tsconfig.json ./tests/run-unit.ts",
+    "test:onboarding": "npm run build && ts-node --project tsconfig.json ./tests/onboarding.ts",
+    "test:quickstart": "node --test tests/quickstart.test.cjs",
+    "test:docs": "node scripts/check-docs.cjs",
+    "test:package": "npm run build && node scripts/check-package.cjs",
     "test:integration": "ts-node --project tsconfig.json ./tests/run-integration.ts",
     "test:e2e": "ts-node --project tsconfig.json ./tests/run-e2e.ts",
     "test:all": "ts-node --project tsconfig.json ./tests/run-all.ts",
@@ -65,7 +71,7 @@
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^20.18.1 || 22.x || 23.x || 24.x || 25.x"
   },
   "publishConfig": {
     "access": "public"

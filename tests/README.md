@@ -1,6 +1,6 @@
 # KODE SDK 测试套件
 
-测试体系由 **单元测试 → 集成测试 → 端到端场景** 三层构成，确保 SDK 对外能力（Agent 生命周期、事件播报、权限审批、Hook 拦截、Sandbox 边界、内置工具、Todo 流程等）具备生产级覆盖与回归保障。
+测试体系由 **单元测试 → 集成测试 → 端到端场景** 三层构成，确保 SDK 对外能力（Agent 生命周期、事件播报、权限审批、Hook 拦截、Sandbox 边界、内置工具、Todo 流程等）覆盖常见使用路径并提供回归保障；通过测试不代表所有环境都没有问题。
 
 ## 目录概览
 
@@ -33,6 +33,20 @@ npm run test:all
 ```
 
 > 在执行集成 / 端到端测试前，请确认 `.env.test` 已配置真实模型 API 信息，并确保网络可访问该模型服务。
+
+### 离线上手回归
+
+```bash
+npm run test:quickstart   # Node 内置运行器；不需要 npm 依赖，不执行真实安装
+npm run test:onboarding   # 先构建，用 mock provider 检查公开 API 与入门示例
+npm run test:package      # 本地打包并离线安装到全新临时项目，检查 CJS/ESM、声明与完整示例；不发布
+npm run test:package -- --native # 另运行消费者原生安装脚本及 SQLite 健康/关闭检查；CI 使用
+npm run typecheck:examples
+```
+
+默认打包检查禁用依赖安装脚本，要求依赖 tarball 已在 npm 缓存中。`--native` 保留离线 npm 依赖解析，但原生安装子脚本可能联网下载预编译二进制或构建所需文件；它不代表完全离线或完整平台矩阵。CI 先运行正常 `npm ci`，再验证全新 tarball 消费者。
+
+`npm test` / `test:unit` 先构建，默认不加载 `.env.test`，并明确跳过依赖外部数据库的 PostgreSQL 套件。需要 PostgreSQL 回归时，在已配置测试数据库的环境中设置 `KODE_TEST_POSTGRES=1` 再运行；CI 单元测试任务已启用。不要把数据库不可用时跳过的用例视为实际通过。`test:onboarding` 禁止真实 fetch，覆盖首次/连续请求、事件过滤、并发消费、审批允许/拒绝与应用截止期限、中断、工具并发与参数、受控 HTTP/SSE 错误、真实子进程崩溃恢复、文件路径/符号链接边界和错误返回，不读取模型密钥。
 
 ### 集成测试配置
 

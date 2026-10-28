@@ -15,6 +15,9 @@ KODE SDK supports SQLite and PostgreSQL as persistence backends, providing high-
 
 ## Environment Variables
 
+Store factories require an explicit configuration object; the SDK does not auto-select a backend from `KODE_STORE_TYPE`. The variables below are application inputs to map into that object. The SQLite/PostgreSQL stores also use a fileStore directory for events, Todo, history and media; a database alone does not make these stores fully distributed.
+
+
 <!-- tabs:start -->
 #### **Linux / macOS**
 ```bash
@@ -63,19 +66,19 @@ set KODE_STORE_PATH=./data/store
 ### Using Factory Function (Recommended)
 
 ```typescript
+import { mkdirSync } from 'node:fs';
 import { createExtendedStore } from '@shareai-lab/kode-sdk';
 
-// Auto-selects backend based on KODE_STORE_TYPE
-const store = await createExtendedStore();
+mkdirSync('./data', { recursive: true });
 
 // Or specify backend explicitly
-const sqliteStore = await createExtendedStore({
+const sqliteStore = createExtendedStore({
   type: 'sqlite',
   dbPath: './data/agents.db',
   fileStoreBaseDir: './data/store',
 });
 
-const postgresStore = await createExtendedStore({
+const postgresStore = createExtendedStore({
   type: 'postgres',
   connection: {
     host: process.env.POSTGRES_HOST ?? 'localhost',
@@ -112,24 +115,30 @@ const postgresStore = new PostgresStore(
 ### Using with Agent
 
 ```typescript
-import { Agent, createExtendedStore } from '@shareai-lab/kode-sdk';
+import { mkdirSync } from 'node:fs';
+import {
+  Agent, AnthropicProvider, AgentTemplateRegistry, ToolRegistry,
+  SandboxFactory, LocalSandbox, createExtendedStore,
+} from '@shareai-lab/kode-sdk';
 
-const store = await createExtendedStore();
-
-const agent = await Agent.create({
-  provider,
-  store,
-  template: {
-    id: 'assistant',
-    systemPrompt: 'You are a helpful assistant.',
-    tools: [],
-  },
-});
-
-await agent.send('Hello!');
-
-// Close database when done
-await store.close();
+mkdirSync('./data', { recursive: true });
+const apiKey = process.env.ANTHROPIC_API_KEY;
+if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY');
+const provider = new AnthropicProvider(apiKey, process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', process.env.ANTHROPIC_BASE_URL);
+const store = createExtendedStore({ type: 'sqlite', dbPath: './data/agents.db', fileStoreBaseDir: './data/store' });
+const templates = new AgentTemplateRegistry();
+templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant.' });
+const sandbox = new LocalSandbox({ workDir: './workspace', watchFiles: false });
+try {
+  const agent = await Agent.create(
+    { templateId: 'assistant', model: provider, sandbox },
+    { store, templateRegistry: templates, toolRegistry: new ToolRegistry(), sandboxFactory: new SandboxFactory() }
+  );
+  const reply = await agent.chat('Hello!');
+  console.log(reply.text);
+} finally {
+  try { await sandbox.dispose(); } finally { await store.close(); }
+}
 ```
 
 ---
@@ -141,17 +150,11 @@ await store.close();
 Query Agent session list with filtering and pagination.
 
 ```typescript
-interface SessionQueryFilter {
-  templateId?: string;      // Filter by template ID
-  createdAfter?: Date;      // Created after date
-  createdBefore?: Date;     // Created before date
-  limit?: number;           // Max results (default: 100)
-  offset?: number;          // Pagination offset (default: 0)
-}
+import type { SessionFilters } from '@shareai-lab/kode-sdk';
 
 const sessions = await store.querySessions({
   templateId: 'chat-assistant',
-  createdAfter: new Date('2025-01-01'),
+  startDate: Date.parse('2025-01-01'),
   limit: 20,
 });
 
@@ -167,55 +170,37 @@ sessions.forEach(session => {
 
 ### Query Messages: `queryMessages()`
 
-Query message records with filtering by role and content type.
+Query message records with filtering by role and timestamp.
 
 ```typescript
-interface MessageQueryFilter {
-  agentId?: string;
-  role?: 'user' | 'assistant';
-  contentType?: 'text' | 'tool_use' | 'tool_result';
-  createdAfter?: Date;
-  createdBefore?: Date;
-  limit?: number;
-  offset?: number;
-}
+import type { MessageFilters } from '@shareai-lab/kode-sdk';
 
 const messages = await store.queryMessages({
   agentId: 'agt-abc123',
   role: 'assistant',
-  contentType: 'tool_use',
   limit: 50,
 });
 ```
 
 ### Query Tool Calls: `queryToolCalls()`
 
-Query tool call records with filtering by tool name and error status.
+Query tool call records with filtering by tool name and execution state.
 
 ```typescript
-interface ToolCallQueryFilter {
-  agentId?: string;
-  toolName?: string;        // Filter by tool name
-  isError?: boolean;        // Filter by error status
-  hasApproval?: boolean;    // Filter by approval status
-  createdAfter?: Date;
-  createdBefore?: Date;
-  limit?: number;
-  offset?: number;
-}
+import type { ToolCallFilters } from '@shareai-lab/kode-sdk';
 
 const toolCalls = await store.queryToolCalls({
   toolName: 'bash_run',
-  isError: true,
+  state: 'FAILED',
   limit: 10,
 });
 
 toolCalls.forEach(call => {
   console.log({
-    toolCallId: call.toolCallId,
-    toolName: call.toolName,
+    toolCallId: call.id,
+    toolName: call.name,
     input: call.input,
-    output: call.output,
+    output: call.result,
     isError: call.isError,
     approval: call.approval,
   });
@@ -233,13 +218,13 @@ console.log({
   totalMessages: stats.totalMessages,
   totalToolCalls: stats.totalToolCalls,
   totalSnapshots: stats.totalSnapshots,
-  toolCallsByState: stats.toolCallsByState,  // { completed: 10, failed: 2, ... }
+  toolCallsByState: stats.toolCallsByState,  // { COMPLETED: 10, FAILED: 2, ... }
 });
 
 // Calculate success rate using toolCallsByState
 if (stats.toolCallsByState) {
-  const completed = stats.toolCallsByState['completed'] || 0;
-  const successRate = (completed / stats.totalToolCalls * 100).toFixed(2);
+  const completed = stats.toolCallsByState['COMPLETED'] || 0;
+  const successRate = (stats.totalToolCalls ? completed / stats.totalToolCalls * 100 : 0).toFixed(2);
   console.log(`Tool call success rate: ${successRate}%`);
 }
 ```
@@ -328,14 +313,14 @@ while (true) {
 // Limit to recent data
 const messages = await store.queryMessages({
   agentId,
-  createdAfter: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // Last 7 days
+  startDate: Date.now() - 7 * 24 * 60 * 60 * 1000, // Last 7 days
 });
 ```
 
 ### PostgreSQL Connection Pool
 
 ```typescript
-const store = await createExtendedStore({
+const store = createExtendedStore({
   type: 'postgres',
   connection: {
     host: 'localhost',
@@ -417,7 +402,7 @@ Error: sorry, too many clients already
 **Solution**: Optimize connection pool
 
 ```typescript
-const store = await createExtendedStore({
+const store = createExtendedStore({
   type: 'postgres',
   connection: {
     ...config,
@@ -446,8 +431,8 @@ A: Yes. The `ExtendedStore` interface abstracts the underlying implementation:
 
 ```typescript
 const store = process.env.NODE_ENV === 'production'
-  ? await createExtendedStore({ type: 'postgres', ... })
-  : await createExtendedStore({ type: 'sqlite', ... });
+  ? createExtendedStore({ type: 'postgres', ... })
+  : createExtendedStore({ type: 'sqlite', ... });
 ```
 
 **Q: How to delete old data?**
@@ -458,7 +443,7 @@ await store.delete(agentId);
 
 // Batch delete old Agents
 const sessions = await store.querySessions({
-  createdBefore: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 days ago
+  endDate: Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 days ago
 });
 for (const session of sessions) {
   await store.delete(session.agentId);

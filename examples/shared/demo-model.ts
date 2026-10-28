@@ -11,7 +11,7 @@ export function createDemoModelProvider(config: ModelConfig): ModelProvider {
   }
 
   const baseUrl = config.baseUrl ?? process.env.ANTHROPIC_BASE_URL;
-  const modelId = config.model ?? process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4.5-20250929';
+  const modelId = config.model ?? process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929';
 
   return new AnthropicProvider(apiKey, modelId, baseUrl);
 }

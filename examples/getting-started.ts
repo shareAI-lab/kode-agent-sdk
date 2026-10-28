@@ -1,48 +1,62 @@
-import './shared/load-env';
-
 import {
-  Agent,
+  Agent, AnthropicProvider, JSONStore, AgentTemplateRegistry,
+  ToolRegistry, SandboxFactory, LocalSandbox, ModelProvider,
 } from '@shareai-lab/kode-sdk';
-import { createRuntime } from './shared/runtime';
+import { MockProvider } from './shared/mock-provider';
 
-async function main() {
-  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4.5-20250929';
-
-  const deps = createRuntime(({ templates, registerBuiltin }) => {
-    registerBuiltin('todo');
-    templates.register({
-      id: 'hello-assistant',
-      systemPrompt: 'You are a helpful engineer. Keep answers short.',
-      tools: ['todo_read', 'todo_write'],
-      model: modelId,
-      runtime: { todo: { enabled: true, reminderOnStart: true } },
-    });
-  });
-
-  const agent = await Agent.create(
-    {
-      templateId: 'hello-assistant',
-      sandbox: { kind: 'local', workDir: './workspace', enforceBoundary: true },
-    },
-    deps
-  );
-
-  (async () => {
-    for await (const envelope of agent.subscribe(['progress'])) {
-      if (envelope.event.type === 'text_chunk') {
-        process.stdout.write(envelope.event.delta);
+export async function runGettingStarted(provider: ModelProvider, options: {
+  storeDir?: string;
+  workDir?: string;
+  write?: (text: string) => void;
+} = {}): Promise<string> {
+  const templates = new AgentTemplateRegistry();
+  templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant. Keep answers short.' });
+  const sandbox = new LocalSandbox({ workDir: options.workDir ?? './workspace', enforceBoundary: true, watchFiles: false });
+  try {
+    const agent = await Agent.create(
+      { templateId: 'assistant', model: provider, sandbox },
+      {
+        store: new JSONStore(options.storeDir ?? './.kode'),
+        templateRegistry: templates,
+        toolRegistry: new ToolRegistry(),
+        sandboxFactory: new SandboxFactory(),
+        modelFactory: () => provider,
       }
-      if (envelope.event.type === 'done') {
-        console.log('\n--- conversation complete ---');
-        break;
+    );
+    let text = '';
+    for await (const { event } of agent.chatStream('Hello!')) {
+      if (event.type === 'text_chunk') {
+        text += event.delta;
+        (options.write ?? ((chunk) => process.stdout.write(chunk)))(event.delta);
       }
     }
-  })();
-
-  await agent.send('你好！帮我总结下这个仓库的核心能力。');
+    return text;
+  } finally {
+    await sandbox.dispose();
+  }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+async function main() {
+  let provider: ModelProvider;
+  if (process.argv.includes('--mock')) {
+    provider = new MockProvider();
+  } else {
+    require('./shared/load-env');
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY, or use --mock for an offline run.');
+    provider = new AnthropicProvider(
+      apiKey,
+      process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
+      process.env.ANTHROPIC_BASE_URL
+    );
+  }
+  await runGettingStarted(provider);
+  console.log();
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

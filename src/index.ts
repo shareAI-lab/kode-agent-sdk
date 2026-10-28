@@ -3,6 +3,8 @@ export {
   Agent,
   AgentConfig,
   AgentDependencies,
+  ModelFactory,
+  SandboxConfig as AgentSandboxConfig,
   CompleteResult,
   StreamOptions,
   SubscribeOptions,
@@ -68,9 +70,17 @@ export {
 
 // Infrastructure
 export { Store, JSONStore, createStore, createExtendedStore } from './infra/store';
+export type {
+  StoreConfig, ExtendedStore, QueryableStore, SessionFilters, MessageFilters,
+  ToolCallFilters, SessionInfo, AgentStats, PostgresConfig,
+  HistoryWindow, CompressionRecord, RecoveredFile, MediaCacheRecord,
+  StoreHealthStatus, ConsistencyCheckResult, StoreMetrics, LockReleaseFn,
+  JSONStoreConfig, SqliteStoreConfig, PostgresStoreConfig,
+} from './infra/store';
 export { SqliteStore } from './infra/db/sqlite/sqlite-store';
 export { PostgresStore } from './infra/db/postgres/postgres-store';
 export { Sandbox, LocalSandbox, SandboxKind } from './infra/sandbox';
+export type { SandboxFS, SandboxExecResult, LocalSandboxOptions } from './infra/sandbox';
 export { E2BSandbox, E2BFS, E2BTemplateBuilder } from './infra/e2b';
 export type { E2BSandboxOptions, E2BTemplateConfig } from './infra/e2b';
 export { OpenSandbox, OpenSandboxFS } from './infra/opensandbox';
@@ -80,6 +90,7 @@ export {
   ModelConfig,
   ModelResponse,
   ModelStreamChunk,
+  CompletionOptions,
   AnthropicProvider,
   OpenAIProvider,
   GeminiProvider,
@@ -105,6 +116,7 @@ export {
   defineTool,
   defineTools,
   extractTools,
+  tool as toolDecorator,
   ToolAttributes,
   ParamDef,
   SimpleToolDef,

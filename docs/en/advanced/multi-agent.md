@@ -31,12 +31,12 @@ const pool = new AgentPool({
 // Create agents
 const agent1 = await pool.create('agent-1', {
   templateId: 'researcher',
-  modelConfig: { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY! },
+  modelConfig: { provider: 'anthropic', model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', apiKey: process.env.ANTHROPIC_API_KEY! },
 });
 
 const agent2 = await pool.create('agent-2', {
   templateId: 'coder',
-  modelConfig: { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY! },
+  modelConfig: { provider: 'anthropic', model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', apiKey: process.env.ANTHROPIC_API_KEY! },
 });
 
 // Get agent by ID
@@ -299,16 +299,16 @@ async function pipeline(input: string) {
     templateId: 'researcher',
     ...
   });
-  const research = await researcher.send(`Research: ${input}`);
+  const research = await researcher.chat(`Research: ${input}`);
 
   // Step 2: Implement
   const coder = await pool.create('coder-1', {
     templateId: 'coder',
     ...
   });
-  const implementation = await coder.send(`
+  const implementation = await coder.chat(`
     Based on this research:
-    ${research}
+    ${research.text ?? ''}
 
     Implement the solution.
   `);
@@ -318,12 +318,12 @@ async function pipeline(input: string) {
     templateId: 'reviewer',
     ...
   });
-  const review = await reviewer.send(`
+  const review = await reviewer.chat(`
     Review this implementation:
-    ${implementation}
+    ${implementation.text ?? ''}
   `);
 
-  return { research, implementation, review };
+  return { research: research.text, implementation: implementation.text, review: review.text };
 }
 ```
 
@@ -395,14 +395,22 @@ const templates: AgentTemplate[] = [
 Clean up agents when done:
 
 ```typescript
+const sandbox = new LocalSandbox({ workDir: './temp-workspace', watchFiles: false });
+let created = false;
 try {
-  const agent = await pool.create('temp-agent', config);
-  const result = await agent.send(message);
-  return result;
+  const agent = await pool.create('temp-agent', { ...config, sandbox });
+  created = true;
+  return await agent.chat(message);
 } finally {
-  await pool.destroy('temp-agent');
+  try {
+    if (created) await pool.delete('temp-agent');
+  } finally {
+    await sandbox.dispose();
+  }
 }
 ```
+
+This example deletes a temporary session and its persisted data after the turn completes. To retain a session, do not call pool.delete(); manage the sandbox lifetime separately.
 
 ### 4. Permission Inheritance
 

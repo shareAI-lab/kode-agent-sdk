@@ -175,13 +175,13 @@ const store = createExtendedStore({
 
 ```typescript
 const agent = await Agent.create({
-  // ...
+  templateId: 'assistant',
   sandbox: {
     kind: 'local',
     workDir: './workspace',
     enforceBoundary: true,  // 限制文件访问在 workDir 内
   }
-});
+}, deps);
 ```
 
 ## Provider（模型提供者）

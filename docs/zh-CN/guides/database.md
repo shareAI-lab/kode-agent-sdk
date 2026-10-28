@@ -15,6 +15,9 @@ KODE SDK 支持 SQLite 和 PostgreSQL 作为持久化后端，提供高性能的
 
 ## 环境变量配置
 
+Store 工厂需要显式配置对象，不会自动读取 `KODE_STORE_TYPE` 选择后端。下面变量由应用读取并映射到配置。SQLite/PostgreSQL Store 仍使用文件目录存放事件、Todo、历史与媒体；仅更换数据库并不代表所有状态已经分布式共享。
+
+
 <!-- tabs:start -->
 #### **Linux / macOS**
 ```bash
@@ -63,19 +66,19 @@ set KODE_STORE_PATH=./data/store
 ### 使用工厂函数（推荐）
 
 ```typescript
+import { mkdirSync } from 'node:fs';
 import { createExtendedStore } from '@shareai-lab/kode-sdk';
 
-// 根据 KODE_STORE_TYPE 自动选择后端
-const store = await createExtendedStore();
+mkdirSync('./data', { recursive: true });
 
 // 或显式指定后端
-const sqliteStore = await createExtendedStore({
+const sqliteStore = createExtendedStore({
   type: 'sqlite',
   dbPath: './data/agents.db',
   fileStoreBaseDir: './data/store',
 });
 
-const postgresStore = await createExtendedStore({
+const postgresStore = createExtendedStore({
   type: 'postgres',
   connection: {
     host: process.env.POSTGRES_HOST ?? 'localhost',
@@ -112,24 +115,30 @@ const postgresStore = new PostgresStore(
 ### 与 Agent 配合使用
 
 ```typescript
-import { Agent, createExtendedStore } from '@shareai-lab/kode-sdk';
+import { mkdirSync } from 'node:fs';
+import {
+  Agent, AnthropicProvider, AgentTemplateRegistry, ToolRegistry,
+  SandboxFactory, LocalSandbox, createExtendedStore,
+} from '@shareai-lab/kode-sdk';
 
-const store = await createExtendedStore();
-
-const agent = await Agent.create({
-  provider,
-  store,
-  template: {
-    id: 'assistant',
-    systemPrompt: 'You are a helpful assistant.',
-    tools: [],
-  },
-});
-
-await agent.send('Hello!');
-
-// 完成后关闭数据库
-await store.close();
+mkdirSync('./data', { recursive: true });
+const apiKey = process.env.ANTHROPIC_API_KEY;
+if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY');
+const provider = new AnthropicProvider(apiKey, process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', process.env.ANTHROPIC_BASE_URL);
+const store = createExtendedStore({ type: 'sqlite', dbPath: './data/agents.db', fileStoreBaseDir: './data/store' });
+const templates = new AgentTemplateRegistry();
+templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant.' });
+const sandbox = new LocalSandbox({ workDir: './workspace', watchFiles: false });
+try {
+  const agent = await Agent.create(
+    { templateId: 'assistant', model: provider, sandbox },
+    { store, templateRegistry: templates, toolRegistry: new ToolRegistry(), sandboxFactory: new SandboxFactory() }
+  );
+  const reply = await agent.chat('Hello!');
+  console.log(reply.text);
+} finally {
+  try { await sandbox.dispose(); } finally { await store.close(); }
+}
 ```
 
 ---
@@ -141,17 +150,11 @@ await store.close();
 查询 Agent 会话列表，支持过滤和分页。
 
 ```typescript
-interface SessionQueryFilter {
-  templateId?: string;      // 按模板 ID 过滤
-  createdAfter?: Date;      // 创建时间晚于
-  createdBefore?: Date;     // 创建时间早于
-  limit?: number;           // 返回数量限制（默认 100）
-  offset?: number;          // 分页偏移量（默认 0）
-}
+import type { SessionFilters } from '@shareai-lab/kode-sdk';
 
 const sessions = await store.querySessions({
   templateId: 'chat-assistant',
-  createdAfter: new Date('2025-01-01'),
+  startDate: Date.parse('2025-01-01'),
   limit: 20,
 });
 
@@ -167,55 +170,37 @@ sessions.forEach(session => {
 
 ### 消息查询：`queryMessages()`
 
-查询消息记录，支持按角色和内容类型过滤。
+查询消息记录，支持按角色和毫秒时间戳过滤。
 
 ```typescript
-interface MessageQueryFilter {
-  agentId?: string;
-  role?: 'user' | 'assistant';
-  contentType?: 'text' | 'tool_use' | 'tool_result';
-  createdAfter?: Date;
-  createdBefore?: Date;
-  limit?: number;
-  offset?: number;
-}
+import type { MessageFilters } from '@shareai-lab/kode-sdk';
 
 const messages = await store.queryMessages({
   agentId: 'agt-abc123',
   role: 'assistant',
-  contentType: 'tool_use',
   limit: 50,
 });
 ```
 
 ### 工具调用查询：`queryToolCalls()`
 
-查询工具调用记录，支持按工具名和错误状态过滤。
+查询工具调用记录，支持按工具名称和执行状态过滤。
 
 ```typescript
-interface ToolCallQueryFilter {
-  agentId?: string;
-  toolName?: string;        // 按工具名称过滤
-  isError?: boolean;        // 按错误状态过滤
-  hasApproval?: boolean;    // 按审批状态过滤
-  createdAfter?: Date;
-  createdBefore?: Date;
-  limit?: number;
-  offset?: number;
-}
+import type { ToolCallFilters } from '@shareai-lab/kode-sdk';
 
 const toolCalls = await store.queryToolCalls({
   toolName: 'bash_run',
-  isError: true,
+  state: 'FAILED',
   limit: 10,
 });
 
 toolCalls.forEach(call => {
   console.log({
-    toolCallId: call.toolCallId,
-    toolName: call.toolName,
+    toolCallId: call.id,
+    toolName: call.name,
     input: call.input,
-    output: call.output,
+    output: call.result,
     isError: call.isError,
     approval: call.approval,
   });
@@ -233,13 +218,13 @@ console.log({
   totalMessages: stats.totalMessages,
   totalToolCalls: stats.totalToolCalls,
   totalSnapshots: stats.totalSnapshots,
-  toolCallsByState: stats.toolCallsByState,  // { completed: 10, failed: 2, ... }
+  toolCallsByState: stats.toolCallsByState,  // { COMPLETED: 10, FAILED: 2, ... }
 });
 
 // 使用 toolCallsByState 计算成功率
 if (stats.toolCallsByState) {
-  const completed = stats.toolCallsByState['completed'] || 0;
-  const successRate = (completed / stats.totalToolCalls * 100).toFixed(2);
+  const completed = stats.toolCallsByState['COMPLETED'] || 0;
+  const successRate = (stats.totalToolCalls ? completed / stats.totalToolCalls * 100 : 0).toFixed(2);
   console.log(`工具调用成功率: ${successRate}%`);
 }
 ```
@@ -328,14 +313,14 @@ while (true) {
 // 限制到最近数据
 const messages = await store.queryMessages({
   agentId,
-  createdAfter: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // 最近 7 天
+  startDate: Date.now() - 7 * 24 * 60 * 60 * 1000, // 最近 7 天
 });
 ```
 
 ### PostgreSQL 连接池配置
 
 ```typescript
-const store = await createExtendedStore({
+const store = createExtendedStore({
   type: 'postgres',
   connection: {
     host: 'localhost',
@@ -417,7 +402,7 @@ Error: sorry, too many clients already
 **解决方案**：优化连接池
 
 ```typescript
-const store = await createExtendedStore({
+const store = createExtendedStore({
   type: 'postgres',
   connection: {
     ...config,
@@ -446,8 +431,8 @@ A: 可以。`ExtendedStore` 接口抽象了底层实现：
 
 ```typescript
 const store = process.env.NODE_ENV === 'production'
-  ? await createExtendedStore({ type: 'postgres', ... })
-  : await createExtendedStore({ type: 'sqlite', ... });
+  ? createExtendedStore({ type: 'postgres', ... })
+  : createExtendedStore({ type: 'sqlite', ... });
 ```
 
 **Q: 如何删除旧数据？**
@@ -458,7 +443,7 @@ await store.delete(agentId);
 
 // 批量删除旧 Agent
 const sessions = await store.querySessions({
-  createdBefore: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), // 90 天前
+  endDate: Date.now() - 90 * 24 * 60 * 60 * 1000, // 90 天前
 });
 for (const session of sessions) {
   await store.delete(session.agentId);

@@ -40,12 +40,10 @@ async function checkPostgresAvailable(): Promise<boolean> {
     }
 
     if (error.code === 'ECONNREFUSED') {
-      console.log(`  ⚠️  PostgreSQL 不可用，跳过测试`);
+      console.log('PostgreSQL test database is unavailable.');
       console.log(`  💡 启动测试数据库: docker run --name kode-postgres-test -e POSTGRES_PASSWORD=testpass123 -e POSTGRES_DB=kode_test -p 5433:5432 -d postgres:16-alpine`);
-      console.log(`  📝 注意：测试会显示为"通过"，但实际未执行`);
     } else {
-      console.log(`  ⚠️  PostgreSQL 连接失败，跳过测试: ${error.message}`);
-      console.log(`  📝 注意：测试会显示为"通过"，但实际未执行`);
+      console.log(`PostgreSQL test database connection failed: ${error.message}`);
     }
     return false;
   }
@@ -55,8 +53,7 @@ runner
   .beforeAll(async () => {
     skipTests = !(await checkPostgresAvailable());
     if (skipTests) {
-      console.log(`\n  ⚠️  以下所有测试将被跳过（因为 PostgreSQL 不可用）\n`);
-      return;
+      throw new Error('PostgreSQL test database is unavailable; the explicitly selected suite cannot run.');
     }
 
     store = new PostgresStore(PG_CONFIG, TEST_STORE_DIR);

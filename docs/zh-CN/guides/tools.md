@@ -1,5 +1,7 @@
 # 工具系统指南
 
+兼容 OpenAI 的服务必须在流式响应中返回结构化的 `tool_calls`。即使普通文本中含有看似工具调用的 JSON，SDK 仍将它作为文本处理，不会执行工具或触发审批。请确认服务支持该模型的工具格式，并已开启工具解析器；仅设置 `tool_choice` 不能补足服务端缺失的解析器。
+
 KODE SDK 提供完整的工具系统，包含内置工具、自定义工具定义 API 和 MCP 集成。所有工具遵循以下规范：
 
 - **Prompt 说明书**：每个工具都提供详细 Prompt，引导模型安全使用
@@ -567,13 +569,12 @@ A: 是的，自定义事件作为 `MonitorToolCustomEvent` 被完整持久化到
 A: 可以自由混用，Agent 接受任何 `ToolInstance`：
 
 ```typescript
-const agent = await Agent.create({
-  tools: [
-    oldStyleTool,           // 旧方式
-    defineTool({ ... }),    // 新方式
-    new FsRead(),           // 内置工具
-  ]
-});
+const tools = new ToolRegistry();
+tools.register('old_tool', () => oldStyleTool);
+tools.register('new_tool', () => newStyleTool);
+tools.register('fs_read', () => FsRead);
+templates.register({ id: 'my-assistant', systemPrompt: 'You are helpful.', tools: ['old_tool', 'new_tool', 'fs_read'] });
+const agent = await Agent.create({ templateId: 'my-assistant' }, { ...deps, templateRegistry: templates, toolRegistry: tools });
 ```
 
 ---
@@ -583,3 +584,5 @@ const agent = await Agent.create({
 - 示例代码：`examples/tooling/simplified-tools.ts`
 - 类型定义：`src/tools/define.ts`
 - 事件系统：[events.md](./events.md)
+
+`tool()` 创建使用 Zod 的 ToolInstance。配合 `extractTools()` 的实验性旧式方法装饰器应导入 `toolDecorator`，并开启 `experimentalDecorators`；见 `examples/tooling/simplified-tools.ts`。

@@ -2,9 +2,11 @@
 
 > This document outlines the development roadmap for KODE SDK, based on actual current capabilities and planned enhancements.
 
+Future versions, timelines, package names and code samples below are design proposals unless listed as available in Current State. They are not a commitment or released API.
+
 ---
 
-## Current State (v2.7.0)
+## Current State (main; package version 2.7.5)
 
 ### What Works Well
 
@@ -12,6 +14,8 @@
 |---------|--------|-------|
 | Agent State Machine | Stable | 7-stage breakpoint system |
 | JSONStore | Stable | WAL-protected file persistence |
+| SqliteStore / PostgresStore | Available | Built-in database persistence; see [Database guide](docs/en/guides/database.md) |
+| E2B / OpenSandbox | Available | Cloud and self-hosted sandbox implementations |
 | Event System | Stable | 3 channels (Progress/Control/Monitor) |
 | Fork/Resume | Stable | Safe fork points, crash recovery |
 | Multi-provider | Stable | Anthropic, OpenAI, Gemini, DeepSeek, Qwen, GLM... |
@@ -25,9 +29,8 @@
 
 | Limitation | Impact | Workaround |
 |------------|--------|------------|
-| JSONStore only | No database persistence | Implement custom Store |
 | Single-process pool | No distributed scaling | Build orchestration layer |
-| 5-min processing timeout | Not configurable | Fork SDK if needed |
+| 5-min processing warning | Threshold not configurable | Interrupt and await completion before retrying; no overlapping forced restart |
 | No stateless mode | Serverless challenges | Request-scoped pattern |
 | No distributed locking | Multi-instance conflicts | External coordination |
 
@@ -93,7 +96,7 @@ const agent = await Agent.create({
 
 ### v3.0: Official Store Implementations
 
-**Goal**: Provide production-ready Store implementations for common databases.
+**Goal**: Explore additional adapters and packaging. `SqliteStore`, `PostgresStore`, `createStore` and `createExtendedStore` already ship in the main SDK. The separate packages and APIs below are proposals, not install instructions.
 
 | Store | Priority | Dependencies |
 |-------|----------|--------------|
@@ -213,7 +216,8 @@ const agent = await Agent.create({
 |---------|--------|-------------|
 | `DockerSandbox` | Planned | Run tools in Docker containers |
 | `K8sSandbox` | Planned | Run tools in Kubernetes pods |
-| `E2BSandbox` | Planned | Integration with E2B.dev |
+| `E2BSandbox` | Available | Integration with E2B.dev |
+| `OpenSandbox` | Available | Self-hosted sandbox integration |
 | `FirecrackerSandbox` | Exploring | MicroVM isolation |
 
 ---
@@ -224,7 +228,6 @@ const agent = await Agent.create({
 
 1. **Store Implementations**
    - MongoDB Store
-   - SQLite Store (for embedded use)
    - Turso/LibSQL Store
 
 2. **Sandbox Implementations**
@@ -238,7 +241,7 @@ const agent = await Agent.create({
 
 ### Contribution Guidelines
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for:
+See [Contribution Guide](docs/en/contribution.md) for:
 - Code style and testing requirements
 - Pull request process
 - Interface implementation guidelines

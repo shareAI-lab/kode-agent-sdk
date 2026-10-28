@@ -1,6 +1,6 @@
 # API 参考
 
-本文档提供 KODE SDK v2.7.0 的完整 API 参考。
+本文档提供 KODE SDK 的完整 API 参考。
 
 ---
 
@@ -28,6 +28,7 @@ const agent = await Agent.create({
   templateId: 'assistant',
   modelConfig: {
     provider: 'anthropic',
+    model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
     apiKey: process.env.ANTHROPIC_API_KEY!,
   },
   sandbox: { kind: 'local', workDir: './workspace' },
@@ -70,7 +71,7 @@ static async resumeFromStore(
 
 #### `agent.send(message, options?)`
 
-发送消息并返回文本响应。
+消息入队后返回消息 ID，不等待模型回复；需要回复时使用 `chat()` 或 `chatStream()`。
 
 ```typescript
 async send(message: string | ContentBlock[], options?: SendOptions): Promise<string>
@@ -94,6 +95,18 @@ interface CompleteResult {
 }
 ```
 
+`chat()` 等待当前轮完成；审批未决时保持 pending，需要预先注册 Control 处理器。模型错误会抛出异常，中断结果使用 `status: 'paused'`，可能携带已输出的部分文本。
+
+#### `agent.chatStream(input, opts?)`
+
+发送输入并消费本轮 Progress 事件，结束或 `break` 时释放订阅。`kinds` 可以过滤输出，即使不包含 `done` 也会结束；模型失败会抛错。`stream()` 是同义方法。另一轮或聊天消费者仍活跃时，重叠的 chat/stream 调用会在输入入队前拒绝；需先等待当前轮结束。
+
+```typescript
+chatStream(input: string | ContentBlock[], opts?: StreamOptions): AsyncIterable<AgentEventEnvelope<ProgressEvent>>
+```
+
+`opts.since` 可以回放较早的进度，但旧的 `done` 不会结束新请求。若要观察或回放已有轮次而不发送新消息，请使用 `subscribe()`。
+
 #### `agent.complete(input, opts?)`
 
 `chat()` 的别名。
@@ -108,7 +121,7 @@ async decide(permissionId: string, decision: 'allow' | 'deny', note?: string): P
 
 #### `agent.interrupt(opts?)`
 
-中断当前处理。
+取消等待工具、拒绝未决审批并向运行中的工具发出取消信号。复用或释放 sandbox 前需等待当前 chat/终止事件。等待网络数据的 Provider 依赖下一次产出配合停止；已发生的副作用不会回滚。
 
 ```typescript
 async interrupt(opts?: { note?: string }): Promise<void>
