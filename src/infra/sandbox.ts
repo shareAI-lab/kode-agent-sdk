@@ -126,24 +126,66 @@ export class LocalSandbox implements Sandbox {
     }
     const id = `watch-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     const fs = require('fs');
-    const watchers: any[] = [];
-    for (const path of paths) {
-      const resolved = this.fs.resolve(path);
-      if (!this.fs.isInside(resolved)) continue;
-      const watcher = fs.watch(resolved, async () => {
-        try {
-          const stat = await this.fs.stat(resolved);
-          listener({ path: resolved, mtimeMs: stat.mtimeMs });
-        } catch {
-          listener({ path: resolved, mtimeMs: Date.now() });
+    const nativeWatchers: Array<{ close(): void }> = [];
+    const snapshots = new Map<string, { signature: string; mtimeMs: number }>();
+    let closed = false;
+    let scanning = false;
+    let poller: NodeJS.Timeout | undefined;
+    const close = () => {
+      closed = true;
+      if (poller) clearInterval(poller);
+      nativeWatchers.forEach(watcher => watcher.close());
+    };
+    const snapshot = async (resolved: string) => {
+      try {
+        const stat = await fs.promises.stat(resolved);
+        return { signature: JSON.stringify([stat.mtimeMs, stat.ctimeMs, stat.size, stat.ino]), mtimeMs: stat.mtimeMs };
+      } catch (error: any) {
+        if (error.code !== 'ENOENT') throw error;
+        return { signature: 'missing', mtimeMs: Date.now() };
+      }
+    };
+    const check = async (resolved: string, nativeNotification = false) => {
+      if (closed || !this.fs.isInside(resolved)) return;
+      try {
+        const current = await snapshot(resolved);
+        if (closed || !this.fs.isInside(resolved)) return;
+        if (nativeNotification || current.signature !== snapshots.get(resolved)?.signature) {
+          snapshots.set(resolved, current);
+          listener({ path: resolved, mtimeMs: current.mtimeMs });
         }
-      });
-      watchers.push(watcher);
+      } catch {
+        // An unavailable target can be checked again by the next polling pass.
+      }
+    };
+    this.watchers.set(id, { paths, close });
+    try {
+      for (const file of paths) {
+        const resolved = this.fs.resolve(file);
+        if (!this.fs.isInside(resolved) || snapshots.has(resolved)) continue;
+        const initial = await snapshot(resolved);
+        if (closed) return id;
+        snapshots.set(resolved, initial);
+        try {
+          const watcher = fs.watch(resolved, () => { void check(resolved, true); });
+          watcher.on('error', () => watcher.close());
+          nativeWatchers.push(watcher);
+        } catch (error: any) {
+          if (!['EMFILE', 'ENFILE', 'ENOSPC', 'ENOENT'].includes(error.code)) throw error;
+        }
+      }
+      if (snapshots.size) {
+        poller = setInterval(() => {
+          if (closed || scanning) return;
+          scanning = true;
+          void Promise.all(Array.from(snapshots.keys(), resolved => check(resolved))).finally(() => { scanning = false; });
+        }, 250);
+      }
+    } catch (error) {
+      close();
+      this.watchers.delete(id);
+      throw error;
     }
-    this.watchers.set(id, {
-      paths,
-      close: () => watchers.forEach((w) => w.close()),
-    });
     return id;
   }
 
@@ -171,31 +213,47 @@ interface LocalFSOptions {
 class LocalFS implements SandboxFS {
   constructor(private workDir: string, private options: LocalFSOptions) {}
 
+  private canonicalPath(p: string, depth = 0): string {
+    const fs = require('fs');
+    const path = require('path');
+    if (depth > 64) throw new Error('Too many symbolic links');
+    const resolved = p;
+    try {
+      return fs.realpathSync.native(resolved);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      try {
+        if (fs.lstatSync(resolved).isSymbolicLink()) {
+          const target = fs.readlinkSync(resolved);
+          const expanded = path.isAbsolute(target) ? target : path.dirname(resolved) + path.sep + target;
+          return this.canonicalPath(expanded, depth + 1);
+        }
+      } catch (linkError: any) {
+        if (linkError.code !== 'ENOENT' && linkError.code !== 'ENOTDIR') throw linkError;
+      }
+      const parent = path.dirname(resolved);
+      if (parent === resolved) throw error;
+      return path.join(this.canonicalPath(parent, depth), path.basename(resolved));
+    }
+  }
+
   resolve(p: string): string {
     const path = require('path');
-    if (path.isAbsolute(p)) return p;
     return path.resolve(this.workDir, p);
   }
 
   isInside(p: string): boolean {
     const path = require('path');
-    const resolved = path.resolve(this.resolve(p)); // resolve 去除 ..
-
-    // 1. 检查是否在 workDir 内
-    const relativeToWork = path.relative(this.workDir, resolved);
-    if (!relativeToWork.startsWith('..') && !path.isAbsolute(relativeToWork)) {
-      return true;
-    }
-
-    // 2. 如果不强制边界检查，允许所有路径
     if (!this.options.enforceBoundary) return true;
-
-    // 3. 检查白名单（先 resolve 防止绕过）
-    return this.options.allowPaths.some((allowed) => {
-      const resolvedAllowed = path.resolve(allowed); // 先 resolve
-      const relative = path.relative(resolvedAllowed, resolved);
-      return !relative.startsWith('..') && !path.isAbsolute(relative);
-    });
+    try {
+      const resolved = this.canonicalPath(this.resolve(p));
+      return [this.workDir, ...this.options.allowPaths].some((allowed) => {
+        const relative = path.relative(this.canonicalPath(allowed), resolved);
+        return relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+      });
+    } catch {
+      return false;
+    }
   }
 
   async read(p: string): Promise<string> {
@@ -238,16 +296,24 @@ class LocalFS implements SandboxFS {
   async glob(pattern: string, opts?: { cwd?: string; ignore?: string[]; dot?: boolean; absolute?: boolean }): Promise<string[]> {
     const path = require('path');
     const cwd = opts?.cwd ? this.resolve(opts.cwd) : this.workDir;
+    if (!this.isInside(cwd)) throw new Error(`Path outside sandbox: ${cwd}`);
     let matches: string[];
     try {
       const fg = require('fast-glob');
+      for (const task of fg.generateTasks(pattern, { cwd })) {
+        if (!this.isInside(path.resolve(cwd, task.base))) {
+          throw new Error(`Path outside sandbox: ${task.base}`);
+        }
+      }
       matches = await fg(pattern, {
         cwd,
+        followSymbolicLinks: !this.options.enforceBoundary,
         dot: opts?.dot ?? false,
         absolute: true,
         ignore: opts?.ignore,
       });
-    } catch {
+    } catch (error: any) {
+      if (error?.message?.startsWith('Path outside sandbox:')) throw error;
       matches = await this.manualGlob(pattern, { cwd, dot: opts?.dot ?? false });
     }
     const filtered = matches.filter((entry: string) => this.isInside(entry));

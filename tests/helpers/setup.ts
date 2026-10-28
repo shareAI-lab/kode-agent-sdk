@@ -38,6 +38,29 @@ export function ensureCleanDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+async function finishAgentForCleanup(agent: Agent, timeoutMs: number): Promise<void> {
+  const internal = agent as any;
+  let timer: NodeJS.Timeout | undefined;
+  agent.schedule().clear();
+  try {
+    await Promise.race([
+      (async () => {
+        while (internal.processingPromise) {
+          const processing = internal.processingPromise;
+          await agent.interrupt({ note: 'test cleanup' });
+          await processing;
+        }
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Agent test cleanup timed out; provider/tool must settle cooperatively')), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    await internal.sandbox.dispose?.();
+  }
+}
+
 /**
  * 单元测试Agent设置选项
  */
@@ -108,7 +131,8 @@ export async function createUnitTestAgent(options: UnitTestAgentOptions = {}) {
     config,
     workDir,
     storeDir,
-    cleanup: async () => {
+    cleanup: async (timeoutMs = 2000) => {
+      await finishAgentForCleanup(agent, timeoutMs);
       await new Promise((resolve) => setTimeout(resolve, 10));
       const fs = require('fs');
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -195,7 +219,8 @@ export async function createIntegrationTestAgent(options: IntegrationTestAgentOp
     config,
     workDir,
     storeDir,
-    cleanup: async () => {
+    cleanup: async (timeoutMs = 2000) => {
+      await finishAgentForCleanup(agent, timeoutMs);
       await new Promise((resolve) => setTimeout(resolve, 10));
       const fs = require('fs');
       fs.rmSync(workDir, { recursive: true, force: true });
