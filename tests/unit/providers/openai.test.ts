@@ -284,6 +284,80 @@ runner
     expect.toEqual(toolDelta?.index, 2);
   });
 
+runner.test('stream usage is preserved when the final SSE event has no choices', async () => {
+  const originalFetch = globalThis.fetch;
+  const entries = [
+    { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] },
+    { choices: [], usage: { prompt_tokens: 242, completion_tokens: 30, total_tokens: 272 } },
+  ];
+  globalThis.fetch = (async (_input: any, init: any) => {
+    expect.toEqual(JSON.parse(init.body).stream_options.include_usage, true);
+    return new Response(entries.map(entry => `data: ${JSON.stringify(entry)}\n\n`).join('') + 'data: [DONE]\n\n');
+  }) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider('offline-placeholder', 'offline', 'http://offline.invalid/v1');
+    const usages: any[] = [];
+    for await (const chunk of provider.stream([{ role: 'user', content: [{ type: 'text', text: 'usage' }] }])) {
+      if (chunk.type === 'message_delta') usages.push(chunk.usage);
+    }
+    expect.toDeepEqual(usages, [{ input_tokens: 242, output_tokens: 30 }]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+runner.test('closing a provider stream cancels and releases its HTTP body reader', async () => {
+  const originalFetch = globalThis.fetch;
+  let cancellations = 0;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"first"}}]}\n\n'));
+    },
+    cancel() { cancellations++; },
+  }));
+  globalThis.fetch = (async () => response) as typeof fetch;
+  try {
+    const provider = new OpenAIProvider('offline-placeholder', 'offline', 'http://offline.invalid/v1');
+    for await (const chunk of provider.stream([{ role: 'user', content: [{ type: 'text', text: 'cancel' }] }])) {
+      if (chunk.type === 'content_block_delta') break;
+    }
+    expect.toEqual(cancellations, 1);
+    expect.toEqual(response.body!.locked, false);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+runner.test('the SSE done marker completes a response without waiting for HTTP EOF', async () => {
+  const originalFetch = globalThis.fetch;
+  let cancellations = 0;
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value;
+      controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"finished"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'));
+    },
+    cancel() { cancellations++; },
+  }));
+  globalThis.fetch = (async () => response) as typeof fetch;
+  const provider = new OpenAIProvider('offline-placeholder', 'offline', 'http://offline.invalid/v1');
+  const collect = (async () => {
+    const chunks = [];
+    for await (const chunk of provider.stream([{ role: 'user', content: [{ type: 'text', text: 'finish' }] }])) chunks.push(chunk);
+    return chunks;
+  })();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const chunks = await Promise.race([collect, new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Provider waited for EOF after the SSE done marker')), 500);
+    })]);
+    expect.toEqual(chunks.filter(chunk => chunk.type === 'content_block_stop').length, 1);
+    expect.toEqual(cancellations, 1);
+    expect.toEqual(response.body!.locked, false);
+  } finally {
+    clearTimeout(timer);
+    if (!cancellations) controller.close();
+    await collect;
+    globalThis.fetch = originalFetch;
+  }
+});
+
 export async function run() {
   return await runner.run();
 }

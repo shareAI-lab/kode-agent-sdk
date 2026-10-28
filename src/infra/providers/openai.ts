@@ -414,6 +414,7 @@ export class OpenAIProvider implements ModelProvider {
     let nextBlockIndex = 0;
     let sawFinishReason = false;
     let usageEmitted = false;
+    let streamDone = false;
     const toolCallBuffers = new Map<number, { id?: string; name?: string; args: string }>();
 
     const resolveTextIndex = (): number => {
@@ -468,93 +469,106 @@ export class OpenAIProvider implements ModelProvider {
       toolCallBuffers.clear();
     }
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (!streamDone) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || !trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const data = trimmed.slice(5).trim();
+          if (!data) continue;
+          if (data === '[DONE]') {
+            streamDone = true;
+            break;
+          }
 
-        let event: any;
-        try {
-          event = JSON.parse(data);
-        } catch {
-          continue;
-        }
+          let event: any;
+          try {
+            event = JSON.parse(data);
+          } catch {
+            continue;
+          }
 
-        const choice = event.choices?.[0];
-        if (!choice) continue;
-
-        const delta = choice.delta ?? {};
-        if (typeof delta.content === 'string' && delta.content.length > 0) {
-          const index = resolveTextIndex();
-          if (!textStarted) {
-            textStarted = true;
+          if (event.error) {
+            const message = typeof event.error === 'string' ? event.error : event.error.message ?? JSON.stringify(event.error);
+            throw new Error(`OpenAI stream error: ${message}`);
+          }
+          if (event.usage && !usageEmitted) {
+            usageEmitted = true;
             yield {
-              type: 'content_block_start',
-              index,
-              content_block: { type: 'text', text: '' },
+              type: 'message_delta',
+              usage: {
+                input_tokens: event.usage.prompt_tokens ?? 0,
+                output_tokens: event.usage.completion_tokens ?? 0,
+              },
             };
           }
-          yield {
-            type: 'content_block_delta',
-            index,
-            delta: { type: 'text_delta', text: delta.content },
-          };
-        }
 
-        if (typeof (delta as any).reasoning_content === 'string') {
-          const reasoningText = (delta as any).reasoning_content;
-          const index = resolveReasoningIndex();
-          if (!reasoningStarted) {
-            reasoningStarted = true;
+          const choice = event.choices?.[0];
+          if (!choice) continue;
+
+          const delta = choice.delta ?? {};
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            const index = resolveTextIndex();
+            if (!textStarted) {
+              textStarted = true;
+              yield {
+                type: 'content_block_start',
+                index,
+                content_block: { type: 'text', text: '' },
+              };
+            }
             yield {
-              type: 'content_block_start',
+              type: 'content_block_delta',
               index,
-              content_block: { type: 'reasoning', reasoning: '' },
+              delta: { type: 'text_delta', text: delta.content },
             };
           }
-          yield {
-            type: 'content_block_delta',
-            index,
-            delta: { type: 'reasoning_delta', text: reasoningText },
-          };
-        }
 
-        const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
-        for (const call of toolCalls) {
-          const index = resolveToolCallIndex(call.index);
-          const entry = toolCallBuffers.get(index) ?? { args: '' };
-          if (call.id) entry.id = call.id;
-          if (call.function?.name) entry.name = call.function.name;
-          if (typeof call.function?.arguments === 'string') {
-            entry.args += call.function.arguments;
+          if (typeof (delta as any).reasoning_content === 'string') {
+            const reasoningText = (delta as any).reasoning_content;
+            const index = resolveReasoningIndex();
+            if (!reasoningStarted) {
+              reasoningStarted = true;
+              yield {
+                type: 'content_block_start',
+                index,
+                content_block: { type: 'reasoning', reasoning: '' },
+              };
+            }
+            yield {
+              type: 'content_block_delta',
+              index,
+              delta: { type: 'reasoning_delta', text: reasoningText },
+            };
           }
-          toolCallBuffers.set(index, entry);
-        }
 
-        if (event.usage && !usageEmitted) {
-          usageEmitted = true;
-          yield {
-            type: 'message_delta',
-            usage: {
-              input_tokens: event.usage.prompt_tokens ?? 0,
-              output_tokens: event.usage.completion_tokens ?? 0,
-            },
-          };
-        }
+          const toolCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+          for (const call of toolCalls) {
+            const index = resolveToolCallIndex(call.index);
+            const entry = toolCallBuffers.get(index) ?? { args: '' };
+            if (call.id) entry.id = call.id;
+            if (call.function?.name) entry.name = call.function.name;
+            if (typeof call.function?.arguments === 'string') {
+              entry.args += call.function.arguments;
+            }
+            toolCallBuffers.set(index, entry);
+          }
 
-        if (choice.finish_reason) {
-          sawFinishReason = true;
+          if (choice.finish_reason) {
+            sawFinishReason = true;
+          }
         }
       }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
 
     if (textStarted) {
