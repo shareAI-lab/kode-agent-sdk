@@ -209,7 +209,7 @@ export async function run() {
 - Use `.github/pull_request_template.md`.
 
 ## Review
-- At least 1 maintainer approval is required before merging.
+- A maintainer may merge after technical review and successful applicable CI checks. A separate approving review is optional.
 - High-risk changes should have additional reviewers.
 
 ## Changelog

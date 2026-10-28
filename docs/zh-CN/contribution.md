@@ -209,7 +209,7 @@ export async function run() {
 - 使用 `.github/pull_request_template.md`。
 
 ## 审查
-- 至少 1 位维护者批准后合并。
+- 维护者完成技术审查且适用 CI 检查通过后可以合并；独立维护者的正式批准为可选项。
 - 高风险改动建议增加 reviewer。
 
 ## 变更记录
