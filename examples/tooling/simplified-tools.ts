@@ -4,7 +4,7 @@
  * 本示例展示三种定义工具的方式：
  * 1. defineTool - 函数式定义（推荐）
  * 2. defineTools - 批量定义
- * 3. @tool 装饰器 + extractTools（实验性）
+ * 3. @toolDecorator 装饰器 + extractTools（实验性）
  */
 
 import '../shared/load-env';
@@ -13,7 +13,7 @@ import {
   Agent,
   defineTool,
   defineTools,
-  tool,
+  toolDecorator,
   extractTools,
   EnhancedToolContext,
 } from '@shareai-lab/kode-sdk';
@@ -108,7 +108,7 @@ const calculatorTools = defineTools([
 // ============================================
 
 class DatabaseTools {
-  @tool({
+  @toolDecorator({
     description: 'Query database',
     params: {
       sql: { type: 'string', description: 'SQL query' },
@@ -129,7 +129,7 @@ class DatabaseTools {
     return { results, count: results.length };
   }
 
-  @tool({
+  @toolDecorator({
     description: 'Insert data into database',
     params: {
       table: { type: 'string', description: 'Table name' },
@@ -205,7 +205,7 @@ async function main() {
     ...extractTools(new DatabaseTools()),
     createUserTool,
   ];
-  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4.5-20250929';
+  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4-5-20250929';
 
   const deps = createRuntime(({ templates, registerBuiltin, tools }) => {
     registerBuiltin('todo');

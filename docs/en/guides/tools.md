@@ -1,5 +1,7 @@
 # Tool System Guide
 
+OpenAI-compatible endpoints must emit structured `tool_calls` in their streaming responses. Plain text containing JSON that looks like a tool invocation is still text and will not execute tools or request approval. Check that the server supports the model’s tool format and has its tool parser enabled; `tool_choice` alone does not supply a missing server parser.
+
 KODE SDK provides a comprehensive tool system with built-in tools, custom tool definition APIs, and MCP integration. All tools follow these conventions:
 
 - **Prompt Instructions**: Each tool includes detailed prompts guiding the model's safe usage
@@ -572,7 +574,7 @@ const tools = new ToolRegistry();
 // Register different styles
 tools.register('old_tool', () => oldStyleTool);
 tools.register('new_tool', () => defineTool({ name: 'new_tool', /* ... */ }));
-tools.register('fs_read', () => new FsRead());
+tools.register('fs_read', () => FsRead);
 
 // Reference in template
 templates.register({
@@ -590,3 +592,5 @@ const agent = await Agent.create({ templateId: 'my-assistant' }, deps);
 - Example code: `examples/tooling/simplified-tools.ts`
 - Type definitions: `src/tools/define.ts`
 - Event system: [events.md](./events.md)
+
+`tool()` creates a Zod-based ToolInstance. For the experimental legacy method decorator used with `extractTools()`, import `toolDecorator` and enable `experimentalDecorators`; see `examples/tooling/simplified-tools.ts`.

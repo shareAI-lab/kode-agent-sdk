@@ -1,198 +1,97 @@
 # Quickstart
 
-Build your first Agent in 5 minutes.
+Start with the offline example from the repository root:
 
-## Prerequisites
+```bash
+npm ci
+npm run build
+npm run example:getting-started -- --mock
+```
 
-- Completed [Installation](./installation.md)
-- Set `ANTHROPIC_API_KEY` environment variable
+For an application installed from npm, follow [Installation](./installation.md), save this complete example as `getting-started.ts`, and run `npx ts-node getting-started.ts`. Set `ANTHROPIC_API_KEY` first. This path calls a real model; the mock command above does not.
 
-## Step 1: Setup Dependencies
-
-KODE SDK uses a dependency injection pattern. First, create the required dependencies:
-
+<!-- runnable:getting-started -->
 ```typescript
 import {
-  Agent,
-  AnthropicProvider,
-  JSONStore,
-  AgentTemplateRegistry,
-  ToolRegistry,
-  SandboxFactory,
-} from '@shareai-lab/kode-sdk';
-
-// Create dependencies
-const store = new JSONStore('./.kode');
-const templates = new AgentTemplateRegistry();
-const tools = new ToolRegistry();
-const sandboxFactory = new SandboxFactory();
-
-// Create provider
-const provider = new AnthropicProvider(
-  process.env.ANTHROPIC_API_KEY!,
-  process.env.ANTHROPIC_MODEL_ID  // optional, uses default if not set
-);
-
-// Register a template
-templates.register({
-  id: 'assistant',
-  systemPrompt: 'You are a helpful assistant.',
-});
-```
-
-## Step 2: Create an Agent
-
-```typescript
-const agent = await Agent.create(
-  { templateId: 'assistant' },
-  {
-    store,
-    templateRegistry: templates,
-    toolRegistry: tools,
-    sandboxFactory,
-    modelFactory: () => provider,
-  }
-);
-```
-
-## Step 3: Subscribe to Events
-
-```typescript
-// Subscribe to progress events (text streaming) using subscribe()
-for await (const envelope of agent.subscribe(['progress'])) {
-  switch (envelope.event.type) {
-    case 'text_chunk':
-      process.stdout.write(envelope.event.delta);
-      break;
-    case 'done':
-      console.log('\n--- Message complete ---');
-      break;
-  }
-  if (envelope.event.type === 'done') break;
-}
-
-// Subscribe to control events using on()
-agent.on('permission_required', async (event) => {
-  console.log(`Tool ${event.call.name} needs approval`);
-  // Auto-approve for demo
-  await event.respond('allow');
-});
-```
-
-## Step 4: Send a Message
-
-```typescript
-await agent.send('Hello! What can you help me with?');
-```
-
-## Complete Example
-
-```typescript
-// getting-started.ts
-import 'dotenv/config';
-import {
-  Agent,
-  AnthropicProvider,
-  JSONStore,
-  AgentTemplateRegistry,
-  ToolRegistry,
-  SandboxFactory,
+  Agent, AnthropicProvider, JSONStore, AgentTemplateRegistry,
+  ToolRegistry, SandboxFactory, LocalSandbox,
 } from '@shareai-lab/kode-sdk';
 
 async function main() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY before running this example.');
   const provider = new AnthropicProvider(
-    process.env.ANTHROPIC_API_KEY!,
-    process.env.ANTHROPIC_MODEL_ID
+    apiKey,
+    process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
+    process.env.ANTHROPIC_BASE_URL
   );
-
-  // Setup dependencies
-  const store = new JSONStore('./.kode');
   const templates = new AgentTemplateRegistry();
-  const tools = new ToolRegistry();
-  const sandboxFactory = new SandboxFactory();
-
-  templates.register({
-    id: 'assistant',
-    systemPrompt: 'You are a helpful assistant.',
-  });
-
-  const agent = await Agent.create(
-    { templateId: 'assistant' },
-    { store, templateRegistry: templates, toolRegistry: tools, sandboxFactory, modelFactory: () => provider }
-  );
-
-  // Subscribe to progress using async iterator
-  const progressTask = (async () => {
-    for await (const envelope of agent.subscribe(['progress'])) {
-      if (envelope.event.type === 'text_chunk') {
-        process.stdout.write(envelope.event.delta);
+  templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant.' });
+  const sandbox = new LocalSandbox({ workDir: './workspace', enforceBoundary: true, watchFiles: false });
+  try {
+    const agent = await Agent.create(
+      { templateId: 'assistant', model: provider, sandbox },
+      {
+        store: new JSONStore('./.kode'),
+        templateRegistry: templates,
+        toolRegistry: new ToolRegistry(),
+        sandboxFactory: new SandboxFactory(),
+        modelFactory: () => provider,
       }
-      if (envelope.event.type === 'done') break;
+    );
+    for await (const { event } of agent.chatStream('Hello!')) {
+      if (event.type === 'text_chunk') process.stdout.write(event.delta);
     }
-  })();
-
-  await agent.send('Hello!');
-  await progressTask;
-  console.log('\n');
+    console.log();
+  } finally {
+    await sandbox.dispose();
+  }
 }
 
-main().catch(console.error);
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
 ```
 
-Run it:
+## Send and consume events
 
-```bash
-npx ts-node getting-started.ts
-```
+`chatStream()` sends one input and consumes progress through completion. It releases its subscription when exhausted or when the caller breaks. `chat()` returns the final reply. Both reject on model execution errors. A `kinds` filter can omit `done` from output without preventing the iterator from ending.
 
-## Using Built-in Tools
-
-Add file system and bash tools by registering them:
+`send()` only enqueues and returns a message ID; it does not wait for the reply. A raw subscription must run concurrently:
 
 ```typescript
-import {
-  Agent,
-  AnthropicProvider,
-  JSONStore,
-  AgentTemplateRegistry,
-  ToolRegistry,
-  SandboxFactory,
-  builtin,
-} from '@shareai-lab/kode-sdk';
-
-const store = new JSONStore('./.kode');
-const templates = new AgentTemplateRegistry();
-const tools = new ToolRegistry();
-const sandboxFactory = new SandboxFactory();
-
-// Register built-in tools
-for (const tool of builtin.fs()) {
-  tools.register(tool.name, () => tool);
-}
-for (const tool of builtin.bash()) {
-  tools.register(tool.name, () => tool);
-}
-for (const tool of builtin.todo()) {
-  tools.register(tool.name, () => tool);
-}
-
-// Register template with tool names
-templates.register({
-  id: 'coding-assistant',
-  systemPrompt: 'You are a coding assistant.',
-  tools: ['fs_read', 'fs_write', 'fs_edit', 'fs_glob', 'fs_grep', 'bash_run', 'todo_read', 'todo_write'],
-});
-
-const provider = new AnthropicProvider(process.env.ANTHROPIC_API_KEY!);
-
-const agent = await Agent.create(
-  { templateId: 'coding-assistant' },
-  { store, templateRegistry: templates, toolRegistry: tools, sandboxFactory, modelFactory: () => provider }
-);
+const progress = (async () => {
+  for await (const { event } of agent.subscribe(['progress'])) {
+    if (event.type === 'text_chunk') process.stdout.write(event.delta);
+    if (event.type === 'done') break;
+  }
+})();
+await agent.send('Hello!');
+await progress;
 ```
 
-## Next Steps
+An agent accepts one active `chat()` / `chatStream()` at a time; an overlapping call rejects before its input is enqueued. Await the current turn first. Completion events describe turns, not message IDs. For application queues, use `send()` with one long-lived consumer.
 
-- [Concepts](./concepts.md) - Understand Agent, Events, Tools
-- [Events Guide](../guides/events.md) - Master the three-channel system
-- [Tools Guide](../guides/tools.md) - Learn about built-in and custom tools
+## Approval, interruption and recovery
+
+Register `permission_required` before sending when the template requires approval. `chat()` remains pending while a decision is outstanding; it does not immediately return `paused`. Call `event.respond('allow' | 'deny')` or `agent.decide(callId, decision)` exactly once. See [Events](../guides/events.md).
+
+`await agent.interrupt()` cancels queued tools, denies outstanding approvals and signals active tools. Consume the terminal `done` event or await the current chat task before reusing the agent or disposing its sandbox. Provider cancellation is cooperative: a provider blocked waiting for network data may not stop until it yields. Interruption cannot roll back tool side effects.
+
+Save `agent.agentId`. Recreate dependencies and register the same template/tools, then call `Agent.resumeFromStore(id, deps, { autoRun: false, strategy: 'crash' })`. Rebind callbacks before sending the next request. See [Resume / Fork](../guides/resume-fork.md).
+
+LocalSandbox file APIs check paths and symbolic-link targets against the configured root and allowPaths. With boundaries enabled, glob does not follow directory symlinks. LocalSandbox shell commands still run with the host user’s permissions: it is not operating-system isolation for untrusted code, and path checks do not eliminate concurrent filesystem races. Use an independently isolated sandbox when that separation is required.
+
+## Resource ownership
+
+File watching combines native notifications with a 250 ms stat check to cover missed notifications and exhausted native watcher limits. Changes can be coalesced; this is not an audit log. Call `unwatchFiles(id)` or dispose the owning sandbox to stop both mechanisms.
+
+The example owns its `LocalSandbox` and disposes it in `finally`. Stop application-created TimeBridge timers with `dispose()`, clear scheduler tasks with `agent.schedule().clear()`, call returned `on()` unsubscribe functions, and close any retained raw subscription. Disconnect MCP clients with `disconnectAllMCP()` if your application created them. For database stores, call `await store.close()` after all agents and event writers have finished. Do not dispose a shared sandbox or store while another agent uses it.
+
+## Next steps
+
+- [Concepts](./concepts.md)
+- [Events](../guides/events.md)
+- [Tools](../guides/tools.md)
+- [Database](../guides/database.md)

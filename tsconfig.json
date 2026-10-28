@@ -12,6 +12,8 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": { "@shareai-lab/kode-sdk": ["./dist"] },
     "allowSyntheticDefaultImports": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false

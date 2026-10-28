@@ -238,22 +238,29 @@ agent.on('token_usage', (event) => {
 ## 安全最佳实践
 
 ```typescript
-// 权限配置
-const agent = await Agent.create({
-  permission: {
-    mode: 'approval',
-    requireApprovalTools: ['bash_run', 'fs_write'],
-    allowTools: ['fs_read', 'fs_glob'],
-  },
-}, deps);
-
-// 沙箱边界
+// 文件 API 的路径边界；shell 执行仍使用宿主用户权限
 const sandbox = new LocalSandbox({
   workDir: '/app/workspace',
   enforceBoundary: true,
   allowPaths: ['/app/workspace', '/tmp'],
 });
+
+// 权限配置
+const agent = await Agent.create({
+  templateId: 'secure-assistant',
+  sandbox,
+  overrides: {
+    permission: {
+      mode: 'auto',
+      requireApprovalTools: ['bash_run', 'fs_write'],
+      allowTools: ['fs_read', 'fs_glob', 'fs_write', 'bash_run'],
+    },
+  },
+}, deps);
+
 ```
+
+允许列表必须包含需审批的工具：不在列表中的工具会在请求审批前被拒绝。此配置允许读取，写文件或执行 shell 前请求审批。发送请求前需注册对应模板、工具和审批回调。LocalSandbox 不提供操作系统隔离；执行不可信代码应使用独立隔离的后端。
 
 ---
 

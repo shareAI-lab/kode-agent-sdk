@@ -15,79 +15,118 @@
 
 ## Quick Start
 
-**One-liner setup** (install dependencies and build):
+Current `main` includes unreleased lifecycle corrections described below. As of 2026-10-25, npm `latest` is 2.7.5 and does not include these changes. Use the source checkout to evaluate them; npm installation alone does not validate the current source.
+
+Requires **Node.js 20.18.1–20.x or 22.x–25.x** (the range supported by the current native SQLite dependency). Choose either a source checkout or a new application.
+
+### Run from this repository
 
 ```bash
-./quickstart.sh
+git clone https://github.com/shareAI-lab/kode-agent-sdk.git
+cd kode-agent-sdk
+npm ci
+npm run build
+npm run example:getting-started -- --mock
 ```
 
-Or install as a dependency:
+The mock run is offline, needs no credentials, and prints a deterministic response. `./quickstart.sh` installs locked dependencies and builds from a checkout; it does not call a model. All `example:*` scripts run from the repository root. For a real request, set `ANTHROPIC_API_KEY` and run `npm run example:getting-started` without `--mock`.
+
+### Use the published package
 
 ```bash
 npm install @shareai-lab/kode-sdk
+npm install --save-dev typescript ts-node @types/node
 ```
 
-Set environment variables:
+Save this configuration as `tsconfig.json`:
 
-<!-- tabs:start -->
-#### **Linux / macOS**
-```bash
-export ANTHROPIC_API_KEY=sk-...
-export ANTHROPIC_MODEL_ID=claude-sonnet-4-20250514  # optional, default: claude-sonnet-4-20250514
-export ANTHROPIC_BASE_URL=https://api.anthropic.com  # optional, default: https://api.anthropic.com
-```
-
-#### **Windows (PowerShell)**
-```powershell
-$env:ANTHROPIC_API_KEY="sk-..."
-$env:ANTHROPIC_MODEL_ID="claude-sonnet-4-20250514"  # optional, default: claude-sonnet-4-20250514
-$env:ANTHROPIC_BASE_URL="https://api.anthropic.com"  # optional, default: https://api.anthropic.com
-```
-<!-- tabs:end -->
-
-Minimal example:
-
-```typescript
-import { Agent, AnthropicProvider, JSONStore } from '@shareai-lab/kode-sdk';
-
-const provider = new AnthropicProvider(
-  process.env.ANTHROPIC_API_KEY!,
-  process.env.ANTHROPIC_MODEL_ID
-);
-
-const agent = await Agent.create({
-  provider,
-  store: new JSONStore('./.kode'),
-  systemPrompt: 'You are a helpful assistant.'
-});
-
-// Subscribe to progress events
-for await (const envelope of agent.subscribe(['progress'])) {
-  if (envelope.event.type === 'text_chunk') {
-    process.stdout.write(envelope.event.delta);
+```json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "Node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
   }
-  if (envelope.event.type === 'done') break;
+}
+```
+
+Set your own provider credentials in the terminal (model and base URL are passed explicitly to the provider):
+
+```bash
+export ANTHROPIC_API_KEY=your-key
+export ANTHROPIC_MODEL_ID=claude-sonnet-4-5-20250929  # example model ID; choose one available to your account
+export ANTHROPIC_BASE_URL=https://api.anthropic.com  # optional
+```
+
+On Windows PowerShell use `$env:ANTHROPIC_API_KEY="your-key"` and the same syntax for the other variables.
+
+Save the following as `getting-started.ts`, then run `npx ts-node getting-started.ts`. This sends a real model request and may incur usage charges.
+
+<!-- runnable:getting-started -->
+```typescript
+import {
+  Agent, AnthropicProvider, JSONStore, AgentTemplateRegistry,
+  ToolRegistry, SandboxFactory, LocalSandbox,
+} from '@shareai-lab/kode-sdk';
+
+async function main() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('Set ANTHROPIC_API_KEY before running this example.');
+  const provider = new AnthropicProvider(
+    apiKey,
+    process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
+    process.env.ANTHROPIC_BASE_URL
+  );
+  const templates = new AgentTemplateRegistry();
+  templates.register({ id: 'assistant', systemPrompt: 'You are a helpful assistant.' });
+  const sandbox = new LocalSandbox({ workDir: './workspace', enforceBoundary: true, watchFiles: false });
+  try {
+    const agent = await Agent.create(
+      { templateId: 'assistant', model: provider, sandbox },
+      {
+        store: new JSONStore('./.kode'),
+        templateRegistry: templates,
+        toolRegistry: new ToolRegistry(),
+        sandboxFactory: new SandboxFactory(),
+        modelFactory: () => provider,
+      }
+    );
+    for await (const { event } of agent.chatStream('Hello!')) {
+      if (event.type === 'text_chunk') process.stdout.write(event.delta);
+    }
+    console.log();
+  } finally {
+    await sandbox.dispose();
+  }
 }
 
-await agent.send('Hello!');
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+});
 ```
 
-Run examples:
+`Agent.create(config, deps)` requires both arguments and a registered template. `chatStream(input)` sends and consumes one turn, ending on `done`; errors reject the iterator. `send()` only enqueues a message and returns its ID. Overlapping `chat()` / `chatStream()` calls on one agent reject before enqueueing; await the current turn first. With `subscribe()`, start the consumer before `send()` and await both tasks; the subscription remains open until you break or return its iterator.
+
+The application owns the sandbox and closes it in `finally`. When using tools with approval, register Control listeners before sending; see [Events](docs/en/guides/events.md). For persistence use JSONStore, SQLite or PostgreSQL; see [Database](docs/en/guides/database.md). SQLite is a native dependency and may require build tools if no prebuilt binary matches your Node/platform.
 
 ```bash
-npm run example:getting-started    # Minimal chat
-npm run example:agent-inbox        # Event-driven inbox
-npm run example:approval           # Tool approval workflow
-npm run example:room               # Multi-agent collaboration
-npm run example:opensandbox        # OpenSandbox basic usage
+npm run test:onboarding     # Offline public-API lifecycle checks
+npm run test:quickstart     # Offline setup-script regression tests
+npm run test:package        # Build, pack locally, check CJS/ESM/types and runnable documentation
+npm run typecheck:examples  # Run after build
 ```
 
-OpenSandbox quick config:
+Other examples (real services or model access may be required):
 
 ```bash
-export OPEN_SANDBOX_API_KEY=...                      # optional (required only when auth is enabled)
-export OPEN_SANDBOX_ENDPOINT=http://127.0.0.1:8080  # optional
-export OPEN_SANDBOX_IMAGE=ubuntu                     # optional
+npm run example:agent-inbox
+npm run example:approval
+npm run example:room
+npm run example:opensandbox
 ```
 
 ## Architecture for Scale
@@ -118,7 +157,7 @@ For production deployments serving many users, we recommend the **Worker Microse
             +--------------------+--------------------+
                                  |
                         +--------v---------+
-                        | Distributed Store|  PostgreSQL / Redis
+                        | Distributed Store|  PostgreSQL / custom Store
                         +------------------+
 ```
 
@@ -128,7 +167,7 @@ For production deployments serving many users, we recommend the **Worker Microse
 3. **Store is shared** - Single source of truth for agent state
 4. **Queue decouples** - Request handling from agent execution
 
-See [docs/en/guides/architecture.md](./docs/en/guides/architecture.md) for detailed deployment guides.
+See [docs/en/advanced/architecture.md](./docs/en/advanced/architecture.md) for detailed deployment guides.
 
 ## Supported Providers
 

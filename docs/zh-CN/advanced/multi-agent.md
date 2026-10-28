@@ -31,12 +31,12 @@ const pool = new AgentPool({
 // 创建 agents
 const agent1 = await pool.create('agent-1', {
   templateId: 'researcher',
-  modelConfig: { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY! },
+  modelConfig: { provider: 'anthropic', model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', apiKey: process.env.ANTHROPIC_API_KEY! },
 });
 
 const agent2 = await pool.create('agent-2', {
   templateId: 'coder',
-  modelConfig: { provider: 'anthropic', apiKey: process.env.ANTHROPIC_API_KEY! },
+  modelConfig: { provider: 'anthropic', model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929', apiKey: process.env.ANTHROPIC_API_KEY! },
 });
 
 // 通过 ID 获取 agent
@@ -299,16 +299,16 @@ async function pipeline(input: string) {
     templateId: 'researcher',
     ...
   });
-  const research = await researcher.send(`研究：${input}`);
+  const research = await researcher.chat(`研究：${input}`);
 
   // 步骤 2：实现
   const coder = await pool.create('coder-1', {
     templateId: 'coder',
     ...
   });
-  const implementation = await coder.send(`
+  const implementation = await coder.chat(`
     基于此研究：
-    ${research}
+    ${research.text ?? ''}
 
     实现解决方案。
   `);
@@ -318,12 +318,12 @@ async function pipeline(input: string) {
     templateId: 'reviewer',
     ...
   });
-  const review = await reviewer.send(`
+  const review = await reviewer.chat(`
     审查此实现：
-    ${implementation}
+    ${implementation.text ?? ''}
   `);
 
-  return { research, implementation, review };
+  return { research: research.text, implementation: implementation.text, review: review.text };
 }
 ```
 
@@ -395,14 +395,22 @@ const templates: AgentTemplate[] = [
 完成后清理 agents：
 
 ```typescript
+const sandbox = new LocalSandbox({ workDir: './temp-workspace', watchFiles: false });
+let created = false;
 try {
-  const agent = await pool.create('temp-agent', config);
-  const result = await agent.send(message);
-  return result;
+  const agent = await pool.create('temp-agent', { ...config, sandbox });
+  created = true;
+  return await agent.chat(message);
 } finally {
-  await pool.destroy('temp-agent');
+  try {
+    if (created) await pool.delete('temp-agent');
+  } finally {
+    await sandbox.dispose();
+  }
 }
 ```
+
+此例会在轮次完成后删除临时会话及其持久化数据。需要保留会话时不要调用 pool.delete()，应单独管理 sandbox 的生命周期。
 
 ### 4. 权限继承
 

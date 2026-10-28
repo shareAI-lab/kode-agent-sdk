@@ -18,7 +18,7 @@ function configFor(templateId: string): AgentConfig {
 }
 
 async function main() {
-  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4.5-20250929';
+  const modelId = process.env.ANTHROPIC_MODEL_ID || 'claude-sonnet-4-5-20250929';
 
   const deps = createRuntime(({ templates, registerBuiltin }) => {
     registerBuiltin('fs', 'todo');

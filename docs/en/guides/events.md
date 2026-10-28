@@ -56,7 +56,14 @@ for await (const envelope of agent.subscribe(['progress'], { since: lastBookmark
 
 ---
 
+When reasoning is enabled, the provider can spend the entire output-token budget on reasoning and return no final text. Agent currently reports stream completion as `done` with `reason: completed` without exposing the provider’s `finish_reason: length`. Check that the reply contains usable text and choose an output budget appropriate for the model; completion alone does not prove that an answer was produced.
+
 ## Control: Approval Plane
+
+Register Control handlers before starting a request. Approval pauses the running turn; `chat()` waits for a decision rather than immediately returning `paused`. Reply once through `event.respond()` or `agent.decide()`. Interrupting a turn resolves outstanding approvals as denied. For a single request, `chatStream()` handles send, terminal events, model errors and subscription cleanup; raw subscriptions need application-managed completion and error handling.
+
+
+Approval has no automatic SDK deadline. The application can set a deadline and respond with deny or interrupt the active turn. Cancel its timer after a decision so a late callback does not try to decide an already settled permission.
 
 Control handles moments requiring human decisions. Events are few but critical, typically persisted to approval systems.
 

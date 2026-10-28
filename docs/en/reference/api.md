@@ -1,6 +1,6 @@
 # API Reference
 
-This document provides a complete API reference for KODE SDK v2.7.0.
+This document provides a complete API reference for KODE SDK.
 
 ---
 
@@ -28,6 +28,7 @@ const agent = await Agent.create({
   templateId: 'assistant',
   modelConfig: {
     provider: 'anthropic',
+    model: process.env.ANTHROPIC_MODEL_ID ?? 'claude-sonnet-4-5-20250929',
     apiKey: process.env.ANTHROPIC_API_KEY!,
   },
   sandbox: { kind: 'local', workDir: './workspace' },
@@ -70,7 +71,7 @@ static async resumeFromStore(
 
 #### `agent.send(message, options?)`
 
-Sends a message and returns the text response.
+Enqueues a message and returns its message ID. It does not wait for a model response; use `chat()` or `chatStream()` for that.
 
 ```typescript
 async send(message: string | ContentBlock[], options?: SendOptions): Promise<string>
@@ -94,6 +95,18 @@ interface CompleteResult {
 }
 ```
 
+`chat()` waits for the turn; while approval is pending, it remains pending and requires a Control handler registered in advance. Model errors reject. Interruption returns `status: 'paused'`, possibly with partial text already streamed.
+
+#### `agent.chatStream(input, opts?)`
+
+Sends input and consumes Progress for one turn. Completion or an early `break` releases the subscription. `kinds` filters emitted output without preventing completion when `done` is omitted. Model errors reject. `stream()` is an alias. An overlapping chat/stream call rejects before enqueueing input while another turn or chat consumer is active; await the current turn first.
+
+```typescript
+chatStream(input: string | ContentBlock[], opts?: StreamOptions): AsyncIterable<AgentEventEnvelope<ProgressEvent>>
+```
+
+`opts.since` may replay earlier progress, but an earlier `done` cannot finish the new request. To observe or replay an existing turn without sending another message, use `subscribe()`.
+
 #### `agent.complete(input, opts?)`
 
 Alias for `chat()`.
@@ -108,7 +121,7 @@ async decide(permissionId: string, decision: 'allow' | 'deny', note?: string): P
 
 #### `agent.interrupt(opts?)`
 
-Interrupts the current processing.
+Cancels queued tools, denies pending approvals and signals active tools. Await the current chat/terminal event before reuse or sandbox disposal. Providers waiting on network data stop cooperatively when they yield; completed side effects are not rolled back.
 
 ```typescript
 async interrupt(opts?: { note?: string }): Promise<void>
@@ -225,7 +238,7 @@ const unsubscribe = agent.on('tool_executed', (event) => {
 });
 
 agent.on('error', (event) => {
-  console.error('Error:', event.error);
+  console.error('Error:', event.message);
 });
 
 // Control events

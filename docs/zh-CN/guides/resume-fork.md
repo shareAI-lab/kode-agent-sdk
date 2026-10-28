@@ -32,7 +32,7 @@ const agent = await Agent.resume('agt-demo', {
   sandbox: { kind: 'local', workDir: './workspace', enforceBoundary: true },
 }, deps, {
   strategy: 'crash',  // 自动封口未完成工具
-  autoRun: true,      // 恢复后继续处理队列
+  autoRun: false,     // 先重新绑定监听器，再发送请求
 });
 ```
 
@@ -50,6 +50,10 @@ const agent = await Agent.resumeFromStore('agt-demo', deps, {
 });
 ```
 
+默认使用存储的元数据；显式传入的 `model` / `modelConfig`、沙箱、权限、Todo 和上下文覆盖优先。轮换凭据或模型时传入覆盖，或由 `modelFactory` 取得当前配置。默认 `autoRun: false`，先重新绑定审批与监控回调，再发送请求。同一 ID 恢复到新实例前，应停止并等待原实例结束。
+
+LocalSandbox 通过 `toConfig()` 保留路径边界、允许路径和文件监听设置。未实现 `toConfig()` 的自定义沙箱实例，恢复时必须通过 `overrides.sandbox` 再次提供；SDK 不会静默换成本地沙箱。
+
 ### Resume 选项
 
 | 选项 | 取值 | 说明 |
@@ -61,6 +65,9 @@ const agent = await Agent.resumeFromStore('agt-demo', deps, {
 > **重要**：Resume 后**必须**重新绑定事件监听（Control/Monitor 回调不会自动恢复）。
 
 ---
+
+恢复默认读取存储元数据；显式传入的 `model` / `modelConfig`、sandbox、权限、Todo 和上下文覆盖优先。轮换凭据或切换模型时应传入覆盖，或使用取得当前配置的 modelFactory。使用默认 `autoRun: false`，先绑定审批和监控监听器再发送；回调不会持久化。同一 ID 恢复到新实例前，应停止并等待原实例结束。
+
 
 ## SDK vs 业务方的职责分界
 
@@ -183,50 +190,44 @@ await progressSubscription;
 
 ---
 
-## 完整 Resume 示例
+## 使用应用持有的依赖恢复一轮请求
 
+调用前在 deps 中注册原模板、工具和 modelFactory，并保持持久化 store 打开。此辅助函数显式接收这些依赖，自行创建和释放 sandbox，默认拒绝工具审批，并返回下一轮回复。所有 Agent 结束后由调用方关闭 store。
+
+<!-- runnable:resume-helper -->
 ```typescript
-import { Agent, createExtendedStore } from '@shareai-lab/kode-sdk';
+import { Agent, AgentDependencies, LocalSandbox } from '@shareai-lab/kode-sdk';
 
-async function resumeAgent(agentId: string) {
-  const store = await createExtendedStore();
-  const deps = createDependencies({ store });
-
-  // 检查 Agent 是否存在
-  const exists = await store.exists(agentId);
-  if (!exists) {
-    throw new Error(`Agent ${agentId} 不存在`);
-  }
-
-  // 从 store 恢复
-  const agent = await Agent.resumeFromStore(agentId, deps, {
-    strategy: 'crash',
-    autoRun: false,
-  });
-
-  // 重新绑定 Monitor 事件监听（on() 仅支持 Control/Monitor 事件）
-  agent.on('tool_executed', (e) => console.log('工具:', e.call.name));
-  agent.on('agent_resumed', (e) => {
-    if (e.sealed.length > 0) {
-      console.log('自动封口的工具:', e.sealed);
-    }
-  });
-  agent.on('error', (e) => console.error('错误:', e.message));
-
-  // 对于 Progress 事件，使用 subscribe()
-  const progressTask = (async () => {
-    for await (const env of agent.subscribe(['progress'])) {
-      if (env.event.type === 'text_chunk') {
-        process.stdout.write(env.event.delta);
+export async function resumeOneTurn(
+  agentId: string,
+  deps: AgentDependencies,
+  workDir: string,
+  input: string
+): Promise<string> {
+  const sandbox = new LocalSandbox({ workDir, enforceBoundary: true, watchFiles: false });
+  const unsubscribe: Array<() => void> = [];
+  let agent: Agent | undefined;
+  try {
+    agent = await Agent.resumeFromStore(agentId, deps, {
+      strategy: 'crash', autoRun: false, overrides: { sandbox },
+    });
+    unsubscribe.push(agent.on('permission_required', event => {
+      void event.respond('deny', { note: 'No interactive approval handler configured' });
+    }));
+    unsubscribe.push(agent.on('error', event => console.error(event.message)));
+    let reply = '';
+    for await (const { event } of agent.chatStream(input)) {
+      if (event.type === 'text_chunk') {
+        process.stdout.write(event.delta);
+        reply += event.delta;
       }
-      if (env.event.type === 'done') break;
     }
-  })();
-
-  // 继续处理
-  await agent.run();
-
-  return agent;
+    return reply;
+  } finally {
+    unsubscribe.forEach(off => off());
+    agent?.schedule().clear();
+    await sandbox.dispose();
+  }
 }
 ```
 

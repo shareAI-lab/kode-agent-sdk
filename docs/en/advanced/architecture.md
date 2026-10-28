@@ -125,7 +125,7 @@ It does NOT provide:
 | Pool | `AgentPool` | Manages multiple Agent instances with lifecycle control |
 | Room | `Room` | Multi-agent messaging and collaboration |
 | Store | `Store`, `JSONStore`, `SqliteStore`, `PostgresStore` | Persistence backends |
-| Sandbox | `LocalSandbox` | Isolated execution environment |
+| Sandbox | `LocalSandbox` | Local file access with path checks and host-user shell execution; no OS isolation |
 | Provider | `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider` | LLM API adapters |
 | Events | `EventBus` | Three-channel event distribution |
 | Hooks | `HookManager` | Pre/post execution interception |

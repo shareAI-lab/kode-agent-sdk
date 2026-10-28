@@ -123,7 +123,7 @@
 | Pool | `AgentPool` | 管理多个 Agent 实例的生命周期 |
 | Room | `Room` | 多 Agent 消息传递和协作 |
 | Store | `Store`, `JSONStore`, `SqliteStore`, `PostgresStore` | 持久化后端 |
-| Sandbox | `LocalSandbox` | 隔离的执行环境 |
+| Sandbox | `LocalSandbox` | 带路径检查的本地文件访问和宿主用户权限的 shell 执行；不提供操作系统隔离 |
 | Provider | `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider` | LLM API 适配器 |
 | Events | `EventBus` | 三通道事件分发 |
 | Hooks | `HookManager` | 执行前/后拦截 |
