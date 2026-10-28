@@ -198,6 +198,10 @@ export class Agent {
   private toolRecords = new Map<string, ToolCallRecord>();
   private interrupted = false;
   private processingPromise: Promise<void> | null = null;
+  private chatActive = false;
+  private enqueueTail: Promise<void> = Promise.resolve();
+  private pendingEnqueues = 0;
+  private toolRecordWrites: Promise<void> = Promise.resolve();
   private pendingNextRound: boolean = false; // 标志位：表示是否需要下一轮处理
   private lastProcessingStart = 0;
   private readonly PROCESSING_TIMEOUT = 5 * 60 * 1000; // 5 分钟
@@ -442,7 +446,12 @@ export class Agent {
     input: string | ContentBlock[],
     opts?: StreamOptions
   ): AsyncIterable<AgentEventEnvelope<ProgressEvent>> {
-    const since = opts?.since ?? this.lastBookmark ?? this.events.getLastBookmark();
+    if (this.chatActive || this.processingPromise || this.pendingEnqueues) {
+      throw new Error('Agent is busy. Await the current turn before chat/chatStream, or use send with one event consumer.');
+    }
+    this.chatActive = true;
+    const turnStart = this.events.getLastBookmark();
+    const since = opts?.since ?? this.lastBookmark ?? turnStart;
     const kinds = opts?.kinds ? Array.from(new Set([...opts.kinds, 'done' as const])) : undefined;
     const iterator = this.events.subscribeProgress({ since, kinds })[Symbol.asyncIterator]();
     try {
@@ -450,7 +459,7 @@ export class Agent {
       for (let next = await iterator.next(); !next.done; next = await iterator.next()) {
         const envelope = next.value as StepEnvelope;
         if (envelope.event.type === 'done') {
-          if (since && envelope.bookmark.seq <= since.seq) continue;
+          if (turnStart && envelope.bookmark.seq <= turnStart.seq) continue;
           const step = envelope[PROCESSING_STEP];
           await step?.finished;
           if (step?.error) throw step.error;
@@ -461,17 +470,19 @@ export class Agent {
       }
     } finally {
       await iterator.return?.();
+      this.chatActive = false;
     }
   }
 
   async chat(input: string | ContentBlock[], opts?: StreamOptions): Promise<CompleteResult> {
+    const turnStart = this.events.getLastBookmark();
     let streamedText = '';
     let bookmark: Bookmark | undefined;
     let resultStep: ProcessingStep | undefined;
     let interrupted = false;
     const streamOpts = opts?.kinds ? { ...opts, kinds: Array.from(new Set([...opts.kinds, 'done' as const])) } : opts;
     for await (const envelope of this.chatStream(input, streamOpts)) {
-      if (envelope.event.type === 'text_chunk') streamedText += envelope.event.delta;
+      if (envelope.event.type === 'text_chunk' && (!turnStart || envelope.bookmark.seq > turnStart.seq)) streamedText += envelope.event.delta;
       if (envelope.event.type === 'done') {
         bookmark = envelope.bookmark;
         resultStep = (envelope as StepEnvelope)[PROCESSING_STEP];
@@ -499,6 +510,17 @@ export class Agent {
   }
 
   async send(message: string | ContentBlock[], options?: SendOptions): Promise<string> {
+    this.pendingEnqueues++;
+    const previous = this.enqueueTail;
+    let release!: () => void;
+    this.enqueueTail = new Promise<void>(resolve => { release = resolve; });
+    await previous;
+    try {
+      return await this.prepareAndQueueInput(message, options);
+    } finally { this.pendingEnqueues--; release(); }
+  }
+
+  private async prepareAndQueueInput(message: string | ContentBlock[], options?: SendOptions): Promise<string> {
     if (typeof message === 'string') {
       return this.messageQueue.send(message, options);
     }
@@ -1047,7 +1069,7 @@ export class Agent {
       });
 
       let currentBlockIndex = -1;
-      let currentToolBuffer = '';
+      const toolBuffers = new Map<number, string>();
       const textBuffers = new Map<number, string>();
       const reasoningBuffers = new Map<number, string>();
 
@@ -1083,7 +1105,7 @@ export class Agent {
             assistantBlocks[currentBlockIndex] = chunk.content_block as ContentBlock;
           } else if (chunk.content_block?.type === 'tool_use') {
             currentBlockIndex = chunk.index ?? 0;
-            currentToolBuffer = '';
+            toolBuffers.set(currentBlockIndex, '');
             const meta = (chunk.content_block as any).meta;
             assistantBlocks[currentBlockIndex] = {
               type: 'tool_use',
@@ -1094,30 +1116,32 @@ export class Agent {
             };
           }
         } else if (chunk.type === 'content_block_delta') {
+          const blockIndex = chunk.index ?? currentBlockIndex;
           if (chunk.delta?.type === 'text_delta') {
             const text = chunk.delta.text ?? '';
-            const existing = textBuffers.get(currentBlockIndex) ?? '';
-            textBuffers.set(currentBlockIndex, existing + text);
-            if (assistantBlocks[currentBlockIndex]?.type === 'text') {
-              (assistantBlocks[currentBlockIndex] as any).text = existing + text;
+            const existing = textBuffers.get(blockIndex) ?? '';
+            textBuffers.set(blockIndex, existing + text);
+            if (assistantBlocks[blockIndex]?.type === 'text') {
+              (assistantBlocks[blockIndex] as any).text = existing + text;
             }
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk', step: this.stepCount, delta: text });
           } else if (chunk.delta?.type === 'reasoning_delta') {
             const text = chunk.delta.text ?? '';
-            const existing = reasoningBuffers.get(currentBlockIndex) ?? '';
-            reasoningBuffers.set(currentBlockIndex, existing + text);
-            if (assistantBlocks[currentBlockIndex]?.type === 'reasoning') {
-              (assistantBlocks[currentBlockIndex] as any).reasoning = existing + text;
+            const existing = reasoningBuffers.get(blockIndex) ?? '';
+            reasoningBuffers.set(blockIndex, existing + text);
+            if (assistantBlocks[blockIndex]?.type === 'reasoning') {
+              (assistantBlocks[blockIndex] as any).reasoning = existing + text;
             }
             if (this.exposeThinking) {
               this.events.emitProgress({ channel: 'progress', type: 'think_chunk', step: this.stepCount, delta: text });
             }
           } else if (chunk.delta?.type === 'input_json_delta') {
-            currentToolBuffer += chunk.delta.partial_json ?? '';
+            const buffer = (toolBuffers.get(blockIndex) ?? '') + (chunk.delta.partial_json ?? '');
+            toolBuffers.set(blockIndex, buffer);
             try {
-              const parsed = JSON.parse(currentToolBuffer);
-              if (assistantBlocks[currentBlockIndex]?.type === 'tool_use') {
-                (assistantBlocks[currentBlockIndex] as any).input = parsed;
+              const parsed = JSON.parse(buffer);
+              if (assistantBlocks[blockIndex]?.type === 'tool_use') {
+                (assistantBlocks[blockIndex] as any).input = parsed;
               }
             } catch {
               // continue buffering
@@ -1136,16 +1160,17 @@ export class Agent {
             });
           }
         } else if (chunk.type === 'content_block_stop') {
-          if (assistantBlocks[currentBlockIndex]?.type === 'text') {
-            const fullText = textBuffers.get(currentBlockIndex) ?? '';
+          const blockIndex = chunk.index ?? currentBlockIndex;
+          if (assistantBlocks[blockIndex]?.type === 'text') {
+            const fullText = textBuffers.get(blockIndex) ?? '';
             this.events.emitProgress({ channel: 'progress', type: 'text_chunk_end', step: this.stepCount, text: fullText });
-          } else if (assistantBlocks[currentBlockIndex]?.type === 'reasoning') {
+          } else if (assistantBlocks[blockIndex]?.type === 'reasoning') {
             if (this.exposeThinking) {
               this.events.emitProgress({ channel: 'progress', type: 'think_chunk_end', step: this.stepCount });
             }
           }
-          currentBlockIndex = -1;
-          currentToolBuffer = '';
+          toolBuffers.delete(blockIndex);
+          if (currentBlockIndex === blockIndex) currentBlockIndex = -1;
         }
       }
 
@@ -1177,6 +1202,7 @@ export class Agent {
           this.lastSfpIndex = this.messages.length - 1;
           this.stepCount++;
           await this.persistMessages();
+          if (this.interrupted) return;
           this.todoManager.onStep();
           this.ensureProcessing();
           return;
@@ -1249,10 +1275,24 @@ export class Agent {
   }
 
   private async processToolCall(toolUse: { id: string; name: string; input: any }): Promise<ContentBlock | null> {
-    const tool = this.tools.get(toolUse.name);
     if (this.interrupted) return null;
     const record = this.toolRecords.get(toolUse.id) || this.registerToolRecord(toolUse);
     this.events.emitProgress({ channel: 'progress', type: 'tool:start', call: this.snapshotToolRecord(record.id) });
+    try {
+      return await this.performToolCall(toolUse, record);
+    } catch (error: any) {
+      if (!this.interrupted && !['COMPLETED', 'FAILED', 'DENIED', 'SEALED'].includes(record.state)) {
+        this.updateToolRecord(record.id, { state: 'FAILED', error: error?.message || String(error), isError: true }, 'tool call failed');
+      }
+      throw error;
+    } finally {
+      this.setBreakpoint('POST_TOOL');
+      this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
+    }
+  }
+
+  private async performToolCall(toolUse: { id: string; name: string; input: any }, record: ToolCallRecord): Promise<ContentBlock | null> {
+    const tool = this.tools.get(toolUse.name);
 
     if (!tool) {
       const message = `Tool not found: ${toolUse.name}`;
@@ -1303,7 +1343,6 @@ export class Agent {
         'policy deny'
       );
       this.setBreakpoint('POST_TOOL');
-      this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
       return this.makeToolResult(toolUse.id, {
         ok: false,
         error: message,
@@ -1340,7 +1379,6 @@ export class Agent {
             'hook deny'
           );
           this.setBreakpoint('POST_TOOL');
-          this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
           return this.makeToolResult(toolUse.id, {
             ok: false,
             error: decision.toolResult || message,
@@ -1359,7 +1397,6 @@ export class Agent {
         );
         this.events.emitMonitor({ channel: 'monitor', type: 'tool_executed', call: this.snapshotToolRecord(record.id) });
         this.setBreakpoint('POST_TOOL');
-        this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
         return this.makeToolResult(toolUse.id, { ok: true, data: decision.result });
       }
     }
@@ -1372,7 +1409,6 @@ export class Agent {
         const message = approvalMeta?.reason || 'Denied by approval';
         this.updateToolRecord(record.id, { state: 'DENIED', error: message, isError: true }, 'approval denied');
         this.setBreakpoint('POST_TOOL');
-        this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
         return this.makeToolResult(toolUse.id, { ok: false, error: message });
       }
       this.setBreakpoint('PRE_TOOL');
@@ -1380,6 +1416,8 @@ export class Agent {
 
     this.setBreakpoint('PRE_TOOL');
     this.updateToolRecord(record.id, { state: 'EXECUTING', startedAt: Date.now() }, 'execution start');
+    await this.persistToolRecords();
+    if (this.interrupted) return null;
     this.setBreakpoint('TOOL_EXECUTING');
 
     const controller = new AbortController();
@@ -1421,14 +1459,7 @@ export class Agent {
         );
         this.events.emitMonitor({ channel: 'monitor', type: 'tool_executed', call: this.snapshotToolRecord(record.id) });
 
-        // 修复双嵌套问题：检查 outcome.content 是否已经是 {ok, data} 结构
-        let resultData = outcome.content;
-        if (outcome.content && typeof outcome.content === 'object' && 'ok' in outcome.content && 'data' in outcome.content) {
-          // 如果工具返回的是 {ok: true, data: {...}} 结构，直接使用 data 部分
-          resultData = (outcome.content as any).data;
-        }
-
-        return this.makeToolResult(toolUse.id, { ok: true, data: resultData });
+        return this.makeToolResult(toolUse.id, { ok: true, data: this.normalizedToolResultData(outcome.content) });
       } else {
         const errorContent = outcome.content as any;
         const errorMessage = errorContent?.error || 'Tool returned failure';
@@ -1519,10 +1550,8 @@ export class Agent {
       clearTimeout(timeoutId);
       this.toolControllers.delete(toolUse.id);
       this.setBreakpoint('POST_TOOL');
-      this.events.emitProgress({ channel: 'progress', type: 'tool:end', call: this.snapshotToolRecord(record.id) });
     }
   }
-
   private registerToolRecord(toolUse: { id: string; name: string; input: any }): ToolCallRecord {
     const now = Date.now();
     const record: ToolCallRecord = {
@@ -1964,15 +1993,16 @@ export class Agent {
     const synthetic: ContentBlock[] = [];
     for (const tu of toolUses) {
       if (!resultIds.has(tu.id)) {
+        if (!this.toolRecords.has(tu.id)) this.registerToolRecord(tu);
         const sealedResult = this.buildSealPayload('TOOL_RESULT_MISSING', tu.id, note);
         this.updateToolRecord(tu.id, { state: 'SEALED', error: sealedResult.message, isError: true }, 'sealed due to interrupt');
         synthetic.push(this.makeToolResult(tu.id, sealedResult.payload));
       }
     }
     if (synthetic.length) {
+      await this.persistToolRecords();
       this.messages.push({ role: 'user', content: synthetic });
       await this.persistMessages();
-      await this.persistToolRecords();
     }
   }
 
@@ -1990,8 +2020,26 @@ export class Agent {
     }
 
     const synthetic: ContentBlock[] = [];
+    const plannedIds = new Set<string>();
+    for (const message of this.messages) {
+      for (const block of message.content) {
+        if (block.type !== 'tool_use') continue;
+        plannedIds.add(block.id);
+        if (!resultIds.has(block.id) && !this.toolRecords.has(block.id)) this.registerToolRecord(block);
+      }
+    }
     for (const [id, record] of this.toolRecords) {
-      if (['COMPLETED', 'FAILED', 'DENIED', 'SEALED'].includes(record.state)) continue;
+      if (['COMPLETED', 'FAILED', 'DENIED', 'SEALED'].includes(record.state)) {
+        if (plannedIds.has(id) && !resultIds.has(id)) {
+          synthetic.push(record.state === 'COMPLETED'
+            ? this.makeToolResult(id, { ok: !record.isError,
+              data: record.auditTrail.some(entry => entry.note === 'hook provided result') ? record.result : this.normalizedToolResultData(record.result),
+              error: record.error })
+            : this.makeToolResult(id, { ok: false, data: record.result, error: record.error || `Recovered ${record.state.toLowerCase()} tool call` }));
+          resultIds.add(id);
+        }
+        continue;
+      }
 
       const sealedResult = this.buildSealPayload(record.state, id, note, record);
       this.updateToolRecord(
@@ -2002,18 +2050,22 @@ export class Agent {
       const snapshot = this.snapshotToolRecord(id);
       sealedSnapshots.push(snapshot);
 
-      if (!resultIds.has(id)) {
+      if (plannedIds.has(id) && !resultIds.has(id)) {
         synthetic.push(this.makeToolResult(id, sealedResult.payload));
+        resultIds.add(id);
       }
     }
 
+    await this.persistToolRecords();
     if (synthetic.length > 0) {
       this.messages.push({ role: 'user', content: synthetic });
       await this.persistMessages();
     }
-    await this.persistToolRecords();
-
     return sealedSnapshots;
+  }
+
+  private normalizedToolResultData(result: any): any {
+    return result && typeof result === 'object' && 'ok' in result && 'data' in result ? result.data : result;
   }
 
   private validateToolArgs(tool: ToolInstance, args: any): { ok: boolean; error?: string } {
@@ -2076,13 +2128,13 @@ export class Agent {
     const baseMessage = (() => {
       switch (state) {
         case 'APPROVAL_REQUIRED':
-          return 'Tool interrupted while awaiting approval; session sealed automatically.';
+          return 'Last saved tool state was awaiting approval; verify possible side effects before retrying.';
         case 'APPROVED':
-          return 'Tool approved but not yet executed; session sealed automatically.';
+          return 'Last saved tool state was approved; execution outcome is unknown. Verify possible side effects.';
         case 'EXECUTING':
           return 'Tool interrupted during execution; session sealed automatically.';
         case 'PENDING':
-          return 'Tool interrupted just before execution; session sealed automatically.';
+          return 'Last saved tool state was pending; execution outcome is unknown. Verify possible side effects.';
         default:
           return fallbackNote;
       }
@@ -2091,13 +2143,10 @@ export class Agent {
     const recommendations: string[] = (() => {
       switch (state) {
         case 'APPROVAL_REQUIRED':
-          return ['Confirm if approval is still required', 'Re-trigger the tool and complete approval to continue'];
         case 'APPROVED':
-          return ['Confirm the tool input is still valid', 'Re-trigger the tool to execute'];
         case 'EXECUTING':
-          return ['Check for possible side effects of the tool', 'Confirm external system state before retrying'];
         case 'PENDING':
-          return ['Confirm tool parameters are correct', 'Re-trigger the tool to continue'];
+          return ['Check for possible side effects of the tool', 'Confirm external system state and approval before deciding whether to retry'];
         default:
           return ['Check the seal description and decide whether to retry the tool'];
       }
@@ -2165,7 +2214,12 @@ export class Agent {
   }
 
   private async persistToolRecords(): Promise<void> {
-    await this.persistentStore.saveToolCallRecords(this.agentId, Array.from(this.toolRecords.values()));
+    const write = this.toolRecordWrites.then(() => this.persistentStore.saveToolCallRecords(this.agentId,
+      Array.from(this.toolRecords.values(), record => ({ ...record, approval: { ...record.approval },
+        auditTrail: record.auditTrail.map(entry => ({ ...entry })),
+      }))));
+    this.toolRecordWrites = write.catch(() => undefined);
+    await write;
   }
 
   private async persistInfo(): Promise<void> {

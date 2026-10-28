@@ -3,10 +3,12 @@ import os from 'os';
 import path from 'path';
 import { Agent, AgentConfig, AgentTemplateRegistry, JSONStore, LocalSandbox, SandboxFactory, ToolRegistry } from '../../../src';
 import { Message, ToolContext } from '../../../src/core/types';
-import { ModelStreamChunk } from '../../../src/infra/provider';
+import { ModelProvider, ModelStreamChunk } from '../../../src/infra/provider';
 import { ToolInstance } from '../../../src/tools/registry';
+import { PermissionConfig } from '../../../src/core/template';
 import { MockProvider } from '../../mock-provider';
 import { TestRunner, expect } from '../../helpers/utils';
+import { createUnitTestAgent } from '../../helpers/setup';
 
 const runner = new TestRunner('Agent lifecycle regressions');
 
@@ -47,8 +49,11 @@ class ScriptedProvider extends MockProvider {
 }
 
 async function fixture(
-  model: ScriptedProvider,
-  options: { approval?: boolean; exec?: (args: any, ctx: ToolContext) => Promise<any> } = {}
+  model: ModelProvider,
+  options: {
+    approval?: boolean; exec?: (args: any, ctx: ToolContext) => Promise<any>;
+    tool?: ToolInstance; schema?: any; concurrency?: number; timeoutMs?: number; permission?: PermissionConfig;
+  } = {}
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kode-lifecycle-'));
   const store = new JSONStore(path.join(root, 'store'), 1);
@@ -57,25 +62,26 @@ async function fixture(
   store.appendEvent = (id, entry) => {
     const write = appendEvent(id, entry);
     eventWrites.add(write);
-    void write.finally(() => eventWrites.delete(write));
+    void write.then(() => eventWrites.delete(write), () => eventWrites.delete(write));
     return write;
   };
   const templateRegistry = new AgentTemplateRegistry();
   templateRegistry.register({
     id: 'lifecycle', systemPrompt: 'Controlled offline lifecycle test.',
-    tools: options.exec ? ['probe'] : [], permission: { mode: options.approval ? 'approval' : 'auto' },
+    tools: options.tool ? [options.tool.name] : options.exec ? ['probe'] : [],
+    permission: options.permission ?? { mode: options.approval ? 'approval' : 'auto' },
   });
   const toolRegistry = new ToolRegistry();
-  if (options.exec) {
-    const probe: ToolInstance = {
-      name: 'probe', description: 'Controlled test tool', input_schema: { type: 'object' }, exec: options.exec,
+  if (options.exec || options.tool) {
+    const probe: ToolInstance = options.tool ?? {
+      name: 'probe', description: 'Controlled test tool', input_schema: options.schema ?? { type: 'object' }, exec: options.exec!,
       toDescriptor: () => ({ source: 'registered', name: 'probe', registryId: 'probe' }),
     };
-    toolRegistry.register('probe', () => probe);
+    toolRegistry.register(probe.name, () => probe);
   }
   const deps = { store, templateRegistry, toolRegistry, sandboxFactory: new SandboxFactory(), modelFactory: () => model };
   const config: AgentConfig = {
-    templateId: 'lifecycle', model, metadata: { maxToolConcurrency: 1 },
+    templateId: 'lifecycle', model, metadata: { maxToolConcurrency: options.concurrency ?? 1, toolTimeoutMs: options.timeoutMs },
     sandbox: { kind: 'local', workDir: root, watchFiles: false, enforceBoundary: true },
   };
   const agent = await Agent.create(config, deps);
@@ -144,6 +150,184 @@ runner.test('a slow consumer finishes its own turn while a later send is still r
     expect.toEqual(model.calls, 2);
     expect.toEqual((await ctx.agent.status()).state, 'WORKING');
   } finally { gate.resolve(); await iterator.return?.(); await ctx.close(); }
+});
+
+runner.test('overlapping chat calls reject the second input before it is enqueued', async () => {
+  const firstGate = deferred();
+  const secondGate = deferred();
+  const started = deferred();
+  const model = new ScriptedProvider(call => (async function* () {
+    if (call === 1) { started.resolve(); await firstGate.promise; yield* text('first reply'); }
+    else { await secondGate.promise; yield* text('second reply'); }
+  })());
+  const ctx = await fixture(model);
+  ctx.releases.push(firstGate.resolve, secondGate.resolve);
+  try {
+    const first = ctx.agent.chat('first');
+    await deadline(started.promise, 'first model start');
+    const second = ctx.agent.chat('second').then(result => ({ result, error: undefined as Error | undefined }),
+      error => ({ result: undefined, error: error as Error }));
+    firstGate.resolve();
+    expect.toEqual((await deadline(first, 'first reply')).text, 'first reply');
+    const outcome = await deadline(second, 'overlapping call');
+    expect.toBeTruthy(outcome.error, `Concurrent call incorrectly completed with ${outcome.result?.text}`);
+    expect.toContain(outcome.error!.message, 'busy');
+    const messages = await ctx.deps.store.loadMessages(ctx.agent.agentId);
+    expect.toEqual(messages.some(message => message.content.some(block => block.type === 'text' && block.text === 'second')), false);
+    expect.toEqual(model.calls, 1);
+  } finally { firstGate.resolve(); secondGate.resolve(); await ctx.close(); }
+});
+
+runner.test('a historical stream bookmark cannot finish a new chat with an old reply', async () => {
+  const gate = deferred();
+  const started = deferred();
+  const replayed = deferred();
+  const model = new ScriptedProvider(call => call === 1 ? text('old reply') : (async function* () {
+    started.resolve(); await gate.promise; yield* text('new reply');
+  })());
+  const ctx = await fixture(model);
+  ctx.releases.push(gate.resolve);
+  const readEvents = ctx.deps.store.readEvents.bind(ctx.deps.store);
+  try {
+    await deadline(ctx.agent.chat('first'), 'first reply');
+    const since = (ctx.agent as any).events.getTimeline().find((entry: any) => entry.event.type === 'text_chunk_start').bookmark;
+    for await (const _entry of readEvents(ctx.agent.agentId)) { /* Flush the first turn's events. */ }
+    ctx.deps.store.readEvents = async function* (id, opts) {
+      for await (const entry of readEvents(id, opts)) yield entry;
+      replayed.resolve();
+    };
+    let finished = false;
+    const second = ctx.agent.chat('second', { since }).then(result => { finished = true; return result; });
+    await deadline(started.promise, 'second model start');
+    await deadline(replayed.promise, 'historical events');
+    await new Promise(resolve => setImmediate(resolve));
+    const finishedBeforeRelease = finished;
+    gate.resolve();
+    const result = await deadline(second, 'second reply');
+    expect.toEqual(finishedBeforeRelease, false);
+    expect.toEqual(result.text, 'new reply');
+  } finally { gate.resolve(); ctx.deps.store.readEvents = readEvents; await ctx.close(); }
+});
+
+runner.test('interrupt while persisting tool uses seals every call before any tool starts', async () => {
+  const gate = deferred();
+  const writing = deferred();
+  let executions = 0;
+  const ctx = await fixture(new ScriptedProvider(() => tools(['one', 'two'])), {
+    exec: async () => { executions++; return {}; },
+  });
+  ctx.releases.push(gate.resolve);
+  const save = ctx.deps.store.saveMessages.bind(ctx.deps.store);
+  let held = false;
+  ctx.deps.store.saveMessages = async (id, messages) => {
+    if (!held && messages.some(message => message.content.some(block => block.type === 'tool_use'))) {
+      held = true; writing.resolve(); await gate.promise;
+    }
+    await save(id, messages);
+  };
+  try {
+    const chat = ctx.agent.chat('plan tools');
+    await deadline(writing.promise, 'tool use persistence');
+    await ctx.agent.interrupt(); gate.resolve();
+    expect.toEqual((await deadline(chat, 'interrupted tool planning')).status, 'paused');
+    expect.toEqual(executions, 0);
+    expect.toDeepEqual((await ctx.deps.store.loadToolCallRecords(ctx.agent.agentId)).map(record => [record.id, record.state]),
+      [['one', 'SEALED'], ['two', 'SEALED']]);
+    expect.toDeepEqual((await ctx.deps.store.loadMessages(ctx.agent.agentId)).flatMap(message => message.content)
+      .filter(block => block.type === 'tool_result').map(block => (block as any).tool_use_id), ['one', 'two']);
+  } finally { gate.resolve(); ctx.deps.store.saveMessages = save; await ctx.close(); }
+});
+
+runner.test('an interrupted chat with a historical bookmark returns only its current partial text', async () => {
+  const gate = deferred();
+  const replayed = deferred();
+  const ctx = await fixture(new ScriptedProvider(call => call === 1 ? text('old reply') : (async function* () {
+    await replayed.promise;
+    yield { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } as ModelStreamChunk;
+    yield { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } } as ModelStreamChunk;
+    await gate.promise;
+    yield { type: 'content_block_stop', index: 0 } as ModelStreamChunk;
+  })()));
+  ctx.releases.push(gate.resolve, replayed.resolve);
+  const readEvents = ctx.deps.store.readEvents.bind(ctx.deps.store);
+  let iterator: AsyncIterator<any> | undefined;
+  try {
+    await deadline(ctx.agent.chat('first'), 'first reply');
+    const since = (ctx.agent as any).events.getTimeline().find((entry: any) => entry.event.type === 'text_chunk_start').bookmark;
+    for await (const _entry of readEvents(ctx.agent.agentId)) { /* Flush history before replay. */ }
+    ctx.deps.store.readEvents = async function* (id, opts) {
+      for await (const entry of readEvents(id, opts)) yield entry;
+      replayed.resolve();
+    };
+    iterator = ctx.agent.subscribe(['progress'])[Symbol.asyncIterator]();
+    const task = ctx.agent.chat('second', { since });
+    await deadline((async () => {
+      while (true) { const entry = await iterator!.next(); if (entry.value?.event.type === 'text_chunk') break; }
+    })(), 'current partial');
+    await ctx.agent.interrupt(); gate.resolve();
+    expect.toEqual((await deadline(task, 'interrupted partial')).text, 'partial');
+  } finally { gate.resolve(); replayed.resolve(); await iterator?.return?.(); ctx.deps.store.readEvents = readEvents; await ctx.close(); }
+});
+
+runner.test('a block input chat enters the queue before a following raw send', async () => {
+  const first = deferred(), second = deferred(), started = deferred();
+  const model = new ScriptedProvider((call, messages) => (async function* () {
+    const value = messages.filter(message => message.role === 'user').at(-1)!.content
+      .filter((block: any) => block.type === 'text').map((block: any) => block.text).join('');
+    if (call === 1) { started.resolve(); await first.promise; } else await second.promise;
+    yield* text(value);
+  })());
+  const ctx = await fixture(model); ctx.releases.push(first.resolve, second.resolve);
+  try {
+    const chat = ctx.agent.chat([{ type: 'text', text: 'first' }]);
+    await ctx.agent.send('second');
+    await deadline(started.promise, 'first model start'); first.resolve();
+    expect.toEqual((await deadline(chat, 'block chat')).text, 'first');
+  } finally { first.resolve(); second.resolve(); await ctx.close(); }
+});
+
+runner.test('a raw send reservation prevents a following chat from taking its reply', async () => {
+  const first = deferred(), second = deferred(), started = deferred();
+  const ctx = await fixture(new ScriptedProvider(call => (async function* () {
+    if (call === 1) { started.resolve(); await first.promise; } else await second.promise;
+    yield* text(call === 1 ? 'first reply' : 'second reply');
+  })()));
+  ctx.releases.push(first.resolve, second.resolve);
+  try {
+    const sent = ctx.agent.send('first');
+    const chat = ctx.agent.chat('second').then(result => ({ result, error: undefined as Error | undefined }),
+      error => ({ result: undefined, error: error as Error }));
+    await deadline(started.promise, 'reserved raw send');
+    await sent; first.resolve();
+    const outcome = await deadline(chat, 'busy chat');
+    expect.toBeTruthy(outcome.error, `Chat took raw send reply ${outcome.result?.text}`);
+    expect.toContain(outcome.error!.message, 'busy');
+    expect.toEqual((await ctx.deps.store.loadMessages(ctx.agent.agentId)).some(message => message.content.some(block => block.type === 'text' && block.text === 'second')), false);
+  } finally { first.resolve(); second.resolve(); await ctx.close(); }
+});
+
+runner.test('interrupt during tool-result persistence does not start another model turn', async () => {
+  const gate = deferred();
+  const writing = deferred();
+  const model = new ScriptedProvider(call => call === 1 ? tools() : text('must not continue'));
+  const ctx = await fixture(model, { exec: async () => ({ ok: true }) });
+  ctx.releases.push(gate.resolve);
+  const save = ctx.deps.store.saveMessages.bind(ctx.deps.store);
+  let held = false;
+  ctx.deps.store.saveMessages = async (id, messages) => {
+    if (!held && messages.some(message => message.content.some(block => block.type === 'tool_result'))) {
+      held = true; writing.resolve(); await gate.promise;
+    }
+    await save(id, messages);
+  };
+  try {
+    const chat = ctx.agent.chat('use tool');
+    await deadline(writing.promise, 'tool result persistence');
+    await ctx.agent.interrupt(); gate.resolve();
+    expect.toEqual((await deadline(chat, 'interrupted tool result')).status, 'paused');
+    await deadline(Promise.resolve((ctx.agent as any).processingPromise), 'remaining work');
+    expect.toEqual(model.calls, 1);
+  } finally { gate.resolve(); ctx.deps.store.saveMessages = save; await ctx.close(); }
 });
 
 runner.test('sending after the timeout threshold does not start overlapping model work', async () => {
@@ -334,4 +518,46 @@ runner.test('nonserializable sandbox instances require an explicit instance when
   } finally { await ctx.close(); }
 });
 
+runner.test('test cleanup denies pending approvals and settles cooperative work', async () => {
+  const requested = deferred();
+  let executions = 0;
+  const ctx = await createUnitTestAgent({
+    customTemplate: { id: 'cleanup-approval', systemPrompt: 'Cleanup fixture', tools: ['probe'], permission: { mode: 'approval' } },
+    registerTools(registry) { registry.register('probe', () => ({ name: 'probe', description: 'cleanup test', input_schema: { type: 'object' },
+      toDescriptor: () => ({ source: 'registered', name: 'probe', registryId: 'probe' }), exec: async () => { executions++; return {}; },
+    })); },
+  });
+  (ctx.agent as any).model = new ScriptedProvider(() => tools());
+  ctx.agent.on('permission_required', () => requested.resolve());
+  const task = ctx.agent.chat('approval');
+  try {
+    await deadline(requested.promise, 'cleanup approval');
+    const cleanup = ctx.cleanup();
+    try { await deadline(cleanup, 'pending approval cleanup'); }
+    catch (error) { await ctx.agent.interrupt(); await task; await cleanup; throw error; }
+    expect.toEqual((await task).status, 'paused'); expect.toEqual(executions, 0);
+  } finally { await ctx.agent.interrupt(); await task; await ctx.cleanup(); }
+});
+
+runner.test('test cleanup bounds an uncooperative provider and still disposes its sandbox', async () => {
+  const gate = deferred(), started = deferred();
+  const ctx = await createUnitTestAgent();
+  (ctx.agent as any).model = new ScriptedProvider(() => (async function* () { started.resolve(); await gate.promise; yield* text('later'); })());
+  const sandbox = (ctx.agent as any).sandbox;
+  let disposed = 0;
+  const dispose = sandbox.dispose.bind(sandbox); sandbox.dispose = async () => { disposed++; await dispose(); };
+  const task = ctx.agent.chat('blocked provider');
+  let cleanup: Promise<any> | undefined;
+  try {
+    await deadline(started.promise, 'blocked provider start');
+    cleanup = (ctx.cleanup as any)(20).then(() => ({ error: undefined }), (error: Error) => ({ error }));
+    const outcome = await Promise.race([cleanup!, new Promise<{ error?: Error }>(resolve => setTimeout(() => resolve({}), 100))]);
+    expect.toBeTruthy(outcome.error, 'Cleanup must reject within its deadline');
+    expect.toContain(outcome.error!.message, 'cleanup timed out');
+    expect.toEqual(disposed, 1);
+  } finally { gate.resolve(); await task; await cleanup; await ctx.cleanup(); }
+});
+
 export async function run() { return runner.run(); }
+
+export { ScriptedProvider, fixture, text, tools, deferred, deadline };
